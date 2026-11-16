@@ -1,0 +1,3 @@
+[workspace]
+resolver = "2"
+members = ["crates/vp-navigation", "crates/vp-navigation-wasm"]
