@@ -1,6 +1,4 @@
-use vp_navigation::{
-    BranchSpec, Graph, NavError, Navigator, Node, Orientation, Side, View,
-};
+use vp_navigation::{BranchSpec, Graph, Grid, NavError, Navigator, Node, Orientation, Side, View};
 
 fn gallery() -> Navigator {
     let graph = Graph::builder()
@@ -132,7 +130,11 @@ fn the_camera_holds_briefly_on_each_stop_it_passes() {
     for _ in 0..90 {
         nav.tick(16.0);
     }
-    assert!(nav.state().position > 1.2, "position {}", nav.state().position);
+    assert!(
+        nav.state().position > 1.2,
+        "position {}",
+        nav.state().position
+    );
 
     let mut glide = gallery();
     glide.set_dwell_ms(0.0);
@@ -141,7 +143,11 @@ fn the_camera_holds_briefly_on_each_stop_it_passes() {
         glide.tick(16.0);
         assert!(!glide.state().holding);
     }
-    assert!(glide.state().position > 1.5, "position {}", glide.state().position);
+    assert!(
+        glide.state().position > 1.5,
+        "position {}",
+        glide.state().position
+    );
 
     let mut snapped = gallery();
     snapped.set_reduced_motion(true);
@@ -188,7 +194,11 @@ fn the_stop_you_are_on_fills_the_front_and_distant_stops_shrink() {
     assert!((view.opacity - 1.0).abs() < 1e-9);
     assert!((view.scale - 1.0).abs() < 1e-6);
     assert!((view.x - frame.vanish_x).abs() < 1e-6);
-    assert!(view.width > 0.5, "a single view takes the front, width {}", view.width);
+    assert!(
+        view.width > 0.5,
+        "a single view takes the front, width {}",
+        view.width
+    );
     assert!(view.y < nav.params().panel_anchor_y - 0.08);
 
     let horizon = frame.nodes.iter().find(|n| n.id == "horizon").unwrap();
@@ -210,7 +220,10 @@ fn emphasis_splits_the_front_and_views_open_as_you_leave() {
     assert_eq!(pair.orientation, Orientation::Horizontal);
     let left = pair.views.iter().find(|v| v.id == "l").unwrap();
     let right = pair.views.iter().find(|v| v.id == "r").unwrap();
-    assert!((left.width - right.width).abs() < 1e-6, "50 and 50 share equally");
+    assert!(
+        (left.width - right.width).abs() < 1e-6,
+        "50 and 50 share equally"
+    );
     assert!(left.x < resting.vanish_x && right.x > resting.vanish_x);
     assert!((left.y - right.y).abs() < 1e-6);
     assert!((left.emphasis - 50.0).abs() < 1e-9);
@@ -226,8 +239,17 @@ fn emphasis_splits_the_front_and_views_open_as_you_leave() {
     let left_gone = leaving.views.iter().find(|v| v.id == "l").unwrap();
     let right_gone = leaving.views.iter().find(|v| v.id == "r").unwrap();
     assert!(left_gone.x < left.x - 0.05, "{} -> {}", left.x, left_gone.x);
-    assert!(right_gone.x > right.x + 0.05, "{} -> {}", right.x, right_gone.x);
-    assert!(left_gone.opacity < 0.92 && left_gone.opacity > 0.15, "{}", left_gone.opacity);
+    assert!(
+        right_gone.x > right.x + 0.05,
+        "{} -> {}",
+        right.x,
+        right_gone.x
+    );
+    assert!(
+        left_gone.opacity < 0.92 && left_gone.opacity > 0.15,
+        "{}",
+        left_gone.opacity
+    );
     assert!((left_gone.y - right_gone.y).abs() < 0.04);
 }
 
@@ -250,7 +272,12 @@ fn a_vertical_pair_splits_up_and_down() {
     let top_gone = leaving.views.iter().find(|v| v.id == "t").unwrap();
     let bottom_gone = leaving.views.iter().find(|v| v.id == "b").unwrap();
     assert!(top_gone.y < top.y - 0.04, "{} -> {}", top.y, top_gone.y);
-    assert!(bottom_gone.y > bottom.y + 0.04, "{} -> {}", bottom.y, bottom_gone.y);
+    assert!(
+        bottom_gone.y > bottom.y + 0.04,
+        "{} -> {}",
+        bottom.y,
+        bottom_gone.y
+    );
     assert!((top_gone.x - bottom_gone.x).abs() < 0.04);
 }
 
@@ -274,19 +301,240 @@ fn three_views_explode_away_from_the_center() {
     let left_travel = left.x - left_gone.x;
     let right_travel = right_gone.x - right.x;
     let middle_travel = (middle_gone.x - middle.x).abs();
-    assert!(left_travel > middle_travel + 0.04, "left {left_travel} middle {middle_travel}");
-    assert!(right_travel > middle_travel + 0.04, "right {right_travel} middle {middle_travel}");
+    assert!(
+        left_travel > middle_travel + 0.04,
+        "left {left_travel} middle {middle_travel}"
+    );
+    assert!(
+        right_travel > middle_travel + 0.04,
+        "right {right_travel} middle {middle_travel}"
+    );
     assert!(left_gone.opacity < 0.9);
+}
+
+#[test]
+fn a_grid_explodes_outward_and_fades() {
+    let mut nav = grid_path();
+    nav.set_reduced_motion(true);
+    nav.focus("mosaic").unwrap();
+    let resting = nav.project();
+    let mosaic = resting.nodes.iter().find(|n| n.id == "mosaic").unwrap();
+    let nw = cell(mosaic, "nw");
+    let ne = cell(mosaic, "ne");
+    let sw = cell(mosaic, "sw");
+    let se = cell(mosaic, "se");
+    assert!(nw.x < ne.x && sw.x < se.x);
+    assert!(nw.y < sw.y && ne.y < se.y);
+    assert!((nw.width - ne.width).abs() < 1e-6);
+    assert!((nw.height - sw.height).abs() < 1e-6);
+
+    nav.move_by(0.45);
+    let frame = nav.project();
+    let leaving = frame.nodes.iter().find(|n| n.id == "mosaic").unwrap();
+    let nw_gone = cell(leaving, "nw");
+    let ne_gone = cell(leaving, "ne");
+    let sw_gone = cell(leaving, "sw");
+    let se_gone = cell(leaving, "se");
+    assert!(nw_gone.x < nw.x - 0.02 && nw_gone.y < nw.y - 0.02);
+    assert!(ne_gone.x > ne.x + 0.02 && ne_gone.y < ne.y - 0.02);
+    assert!(sw_gone.x < sw.x - 0.02 && sw_gone.y > sw.y + 0.02);
+    assert!(se_gone.x > se.x + 0.02 && se_gone.y > se.y + 0.02);
+    assert!(
+        nw_gone.opacity < 0.9 && nw_gone.opacity > 0.1,
+        "{}",
+        nw_gone.opacity
+    );
+}
+
+#[test]
+fn views_wrap_into_the_columns_they_were_given() {
+    let mut nav = grid_path();
+    nav.set_reduced_motion(true);
+    nav.focus("wrap").unwrap();
+    let wrap = nav
+        .project()
+        .nodes
+        .into_iter()
+        .find(|n| n.id == "wrap")
+        .unwrap();
+    let first = cell(&wrap, "a");
+    let second = cell(&wrap, "b");
+    let third = cell(&wrap, "c");
+    assert!(first.x < second.x);
+    assert!(
+        (third.x - first.x).abs() < 1e-6,
+        "the third view wraps to column 1"
+    );
+    assert!(third.y > first.y);
+    assert!((first.y - second.y).abs() < 1e-6);
+}
+
+#[test]
+fn a_spanning_cell_covers_the_tracks_beside_it() {
+    let mut nav = grid_path();
+    nav.set_reduced_motion(true);
+    nav.focus("span").unwrap();
+    let span = nav
+        .project()
+        .nodes
+        .into_iter()
+        .find(|n| n.id == "span")
+        .unwrap();
+    let wide = cell(&span, "wide");
+    let side = cell(&span, "side");
+    let low = cell(&span, "low");
+    assert!(
+        wide.width > side.width * 1.4,
+        "{} vs {}",
+        wide.width,
+        side.width
+    );
+    assert!(wide.x < side.x);
+    assert!(
+        side.height > low.height * 1.4,
+        "{} vs {}",
+        side.height,
+        low.height
+    );
+    assert!(low.y > wide.y);
+    assert!(low.x < wide.x);
+    let mid = cell(&span, "mid");
+    assert!(mid.x > low.x && mid.x < side.x);
+}
+
+#[test]
+fn a_grid_rejects_overlap_and_overflow() {
+    let overlap = grid_stop(
+        "bad",
+        Some(Grid::size(2, 2)),
+        vec![View::new("a", 50.0).at(1, 1), View::new("b", 50.0).at(1, 1)],
+    );
+    assert!(matches!(overlap, Err(NavError::InvalidConfig(_))));
+
+    let overflow = grid_stop(
+        "bad",
+        Some(Grid::size(2, 1)),
+        vec![View::new("a", 50.0).at(1, 1).span(3, 1)],
+    );
+    assert!(matches!(overflow, Err(NavError::InvalidConfig(_))));
+
+    let orphan = grid_stop(
+        "bad",
+        Some(Grid::columns(2)),
+        vec![View::new("a", 50.0).at(1, 0)],
+    );
+    assert!(matches!(orphan, Err(NavError::InvalidConfig(_))));
+}
+
+fn grid_path() -> Navigator {
+    let graph = Graph::builder()
+        .stops(
+            "main",
+            vec![
+                grid_node(
+                    "mosaic",
+                    Some(Grid::size(2, 2)),
+                    vec![
+                        View::new("nw", 50.0),
+                        View::new("ne", 50.0),
+                        View::new("sw", 50.0),
+                        View::new("se", 50.0),
+                    ],
+                ),
+                grid_node(
+                    "wrap",
+                    Some(Grid::columns(2)),
+                    vec![
+                        View::new("a", 40.0),
+                        View::new("b", 40.0),
+                        View::new("c", 40.0),
+                    ],
+                ),
+                grid_node(
+                    "span",
+                    Some(Grid::size(3, 2)),
+                    vec![
+                        View::new("wide", 60.0).at(1, 1).span(2, 1),
+                        View::new("side", 40.0).at(3, 1).span(1, 2),
+                        View::new("low", 30.0).at(1, 2),
+                        View::new("mid", 30.0).at(2, 2),
+                    ],
+                ),
+                Node::single("after", "After"),
+            ],
+        )
+        .build()
+        .unwrap();
+    Navigator::new(graph)
+}
+
+fn grid_node(id: &str, grid: Option<Grid>, views: Vec<View>) -> Node {
+    Node {
+        id: id.into(),
+        label: id.into(),
+        orientation: Orientation::Horizontal,
+        grid,
+        views,
+    }
+}
+
+fn grid_stop(id: &str, grid: Option<Grid>, views: Vec<View>) -> Result<Graph, NavError> {
+    Graph::builder()
+        .stops("main", vec![grid_node(id, grid, views)])
+        .build()
+}
+
+fn cell<'a>(node: &'a vp_navigation::ProjectedNode, id: &str) -> &'a vp_navigation::ProjectedView {
+    node.views.iter().find(|view| view.id == id).unwrap()
+}
+
+#[test]
+fn config_json_places_a_grid() {
+    let json = r#"{
+        "rootPath": "main",
+        "paths": [{ "id": "main", "nodes": [
+            {
+                "id": "g",
+                "label": "Grid",
+                "grid": { "columns": 2, "rows": 2 },
+                "views": [
+                    { "id": "a", "emphasis": 50 },
+                    { "id": "b", "emphasis": 50 },
+                    { "id": "c", "emphasis": 50, "column": 1, "row": 2 },
+                    { "id": "d", "emphasis": 50, "column": 2, "row": 2 }
+                ]
+            },
+            { "id": "next", "label": "Next" }
+        ]}],
+        "projection": { "reducedMotion": true }
+    }"#;
+    let mut nav = Navigator::from_config_json(json).unwrap();
+    nav.focus("g").unwrap();
+    let frame = nav.project();
+    let grid = frame.nodes.iter().find(|node| node.id == "g").unwrap();
+    let a = cell(grid, "a");
+    let d = cell(grid, "d");
+    assert!(a.x < d.x && a.y < d.y);
 }
 
 #[test]
 fn a_single_view_stays_centered_while_it_fades() {
     let mut nav = views_path();
     nav.set_reduced_motion(true);
-    let resting = nav.project().nodes.into_iter().find(|n| n.id == "one").unwrap();
+    let resting = nav
+        .project()
+        .nodes
+        .into_iter()
+        .find(|n| n.id == "one")
+        .unwrap();
     let home = resting.views[0].x;
     nav.move_by(0.4);
-    let leaving = nav.project().nodes.into_iter().find(|n| n.id == "one").unwrap();
+    let leaving = nav
+        .project()
+        .nodes
+        .into_iter()
+        .find(|n| n.id == "one")
+        .unwrap();
     let view = &leaving.views[0];
     assert!((view.x - home).abs() < 0.02, "{}", view.x);
     assert!(view.opacity < 0.9 && view.opacity > 0.1, "{}", view.opacity);
@@ -314,28 +562,25 @@ fn views_path() -> Navigator {
                     id: "pair".into(),
                     label: "Pair".into(),
                     orientation: Orientation::Horizontal,
-                    views: vec![
-                        View { id: "l".into(), emphasis: 50.0 },
-                        View { id: "r".into(), emphasis: 50.0 },
-                    ],
+                    grid: None,
+                    views: vec![View::new("l", 50.0), View::new("r", 50.0)],
                 },
                 Node {
                     id: "stack".into(),
                     label: "Stack".into(),
                     orientation: Orientation::Vertical,
-                    views: vec![
-                        View { id: "t".into(), emphasis: 50.0 },
-                        View { id: "b".into(), emphasis: 50.0 },
-                    ],
+                    grid: None,
+                    views: vec![View::new("t", 50.0), View::new("b", 50.0)],
                 },
                 Node {
                     id: "burst".into(),
                     label: "Burst".into(),
                     orientation: Orientation::Horizontal,
+                    grid: None,
                     views: vec![
-                        View { id: "a".into(), emphasis: 50.0 },
-                        View { id: "m".into(), emphasis: 30.0 },
-                        View { id: "c".into(), emphasis: 20.0 },
+                        View::new("a", 50.0),
+                        View::new("m", 30.0),
+                        View::new("c", 20.0),
                     ],
                 },
                 Node::single("after", "After"),
@@ -624,7 +869,8 @@ fn graph_rejects_broken_links() {
                 id: "a".into(),
                 label: "A".into(),
                 orientation: Orientation::Horizontal,
-                views: vec![View { id: "a".into(), emphasis: 0.0 }],
+                grid: None,
+                views: vec![View::new("a", 0.0)],
             }],
         )
         .build();

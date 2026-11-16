@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::graph::{Node, Orientation, Side};
+use crate::graph::{place_views, Node, Orientation, Placement, Side};
 use crate::navigate::{Navigator, TurnKind};
 use crate::params::Params;
 
@@ -543,7 +543,8 @@ fn hint_for(
     // to the side of the front composition so it stays a way through, not a
     // label sitting on the host's views.
     let near = smoothstep(1.0 - (junction_depth.abs() / params.ui_range.max(0.2)).clamp(0.0, 1.0));
-    let edge = (params.vanish_x + branch.side.sign() * (params.front_width * 0.5 + 0.045)).clamp(0.06, 0.94);
+    let edge = (params.vanish_x + branch.side.sign() * (params.front_width * 0.5 + 0.045))
+        .clamp(0.06, 0.94);
     Some(BranchHint {
         id: branch.id.clone(),
         label: branch.label.clone(),
@@ -606,8 +607,9 @@ struct Slot {
     dy: f64,
     width: f64,
     height: f64,
-    /// Signed position along the orientation, about -1 at one edge and 1 at the other.
-    axis: f64,
+    /// Signed offset from the grid center, about -1 at one edge and 1 at the other.
+    axis_x: f64,
+    axis_y: f64,
 }
 
 struct GroupPose {
@@ -657,26 +659,15 @@ fn project_views(
     let views = slots
         .iter()
         .map(|slot| {
-            let (ox, oy) = match node.orientation {
-                Orientation::Horizontal => (
-                    slot.dx * pose.open + slot.axis * params.explode * pose.explode,
-                    slot.dy * pose.open,
-                ),
-                Orientation::Vertical => (
-                    slot.dx * pose.open,
-                    slot.dy * pose.open + slot.axis * params.explode * pose.explode,
-                ),
-            };
+            // Every grid leaves the same way: each cell travels out from the
+            // center in proportion to where it sits, and the stop fades.
+            let ox = slot.dx * pose.open + slot.axis_x * params.explode * pose.explode;
+            let oy = slot.dy * pose.open + slot.axis_y * params.explode * pose.explode;
             let fit = pose.scale;
             let opacity = pose.opacity;
             if opacity > 0.4 && fit > 0.22 && (-0.05..3.8).contains(&z) {
                 interactive = true;
             }
-            let spin = slot.axis * 14.0 * pose.explode;
-            let (rotate_x, rotate_y) = match node.orientation {
-                Orientation::Horizontal => (0.0, spin + pose.yaw),
-                Orientation::Vertical => (spin, pose.yaw),
-            };
             ProjectedView {
                 id: slot.id.clone(),
                 emphasis: slot.emphasis,
@@ -686,8 +677,8 @@ fn project_views(
                 height: slot.height * fit,
                 scale: fit,
                 opacity,
-                rotate_x,
-                rotate_y,
+                rotate_x: slot.axis_y * 14.0 * pose.explode,
+                rotate_y: slot.axis_x * 14.0 * pose.explode + pose.yaw,
                 z_index: pose.z_index,
             }
         })
@@ -701,8 +692,20 @@ fn project_views(
     }
 }
 
+struct Track {
+    center: f64,
+    size: f64,
+}
+
 fn slots_for(params: &Params, node: &Node) -> Vec<Slot> {
-    if node.views.len() <= 1 {
+    // `Graph` rejects a stop whose views do not fit, so this is the layout
+    // those checks already accepted.
+    let placement = place_views(node).unwrap_or_else(|_| Placement {
+        columns: 1,
+        rows: 1,
+        cells: Vec::new(),
+    });
+    if placement.columns <= 1 && placement.rows <= 1 {
         let view = node.views.first();
         return vec![Slot {
             id: view.map(|view| view.id.clone()).unwrap_or_default(),
@@ -711,46 +714,132 @@ fn slots_for(params: &Params, node: &Node) -> Vec<Slot> {
             dy: 0.0,
             width: params.front_width,
             height: params.page_height,
-            axis: 0.0,
+            axis_x: 0.0,
+            axis_y: 0.0,
         }];
     }
 
-    let sum = node.views.iter().map(|view| view.emphasis).sum::<f64>().max(0.001);
-    let vertical = node.orientation == Orientation::Vertical;
-    let span = if vertical { params.front_height } else { params.front_width };
-    let gap = params.view_gap;
-    let inner = (span - gap * (node.views.len() as f64 - 1.0)).max(0.0);
-    let mut cursor = -span / 2.0;
-    node.views
+    let columns = tracks(
+        &track_weights(&placement, true),
+        params.front_width,
+        params.view_gap,
+    );
+    let row_span = if placement.rows <= 1 {
+        params.column_height
+    } else {
+        params.front_height
+    };
+    let rows = if placement.rows <= 1 {
+        vec![Track {
+            center: 0.0,
+            size: row_span,
+        }]
+    } else {
+        tracks(&track_weights(&placement, false), row_span, params.view_gap)
+    };
+    let half_x = params.front_width / 2.0;
+    let half_y = row_span / 2.0;
+
+    placement
+        .cells
         .iter()
-        .map(|view| {
-            let share = inner * (view.emphasis / sum);
-            let center = cursor + share / 2.0;
-            cursor += share + gap;
-            let axis = if span > 0.001 { center / (span / 2.0) } else { 0.0 };
-            if vertical {
-                Slot {
-                    id: view.id.clone(),
-                    emphasis: view.emphasis,
-                    dx: 0.0,
-                    dy: center,
-                    width: params.front_width,
-                    height: share,
-                    axis,
-                }
-            } else {
-                Slot {
-                    id: view.id.clone(),
-                    emphasis: view.emphasis,
-                    dx: center,
-                    dy: 0.0,
-                    width: share,
-                    height: params.column_height,
-                    axis,
-                }
+        .map(|cell| {
+            let (dx, width) = cover(&columns, cell.column, cell.col_span);
+            let (dy, height) = cover(&rows, cell.row, cell.row_span);
+            Slot {
+                id: cell.id.clone(),
+                emphasis: cell.emphasis,
+                dx,
+                dy,
+                width,
+                height,
+                axis_x: if half_x > 0.001 { dx / half_x } else { 0.0 },
+                axis_y: if placement.rows <= 1 || half_y <= 0.001 {
+                    0.0
+                } else {
+                    dy / half_y
+                },
             }
         })
         .collect()
+}
+
+/// Track weight is the largest share contributed by a view that covers it.
+/// A spanning view divides its emphasis across the tracks it covers, so the
+/// cell's total still matches the share the author wrote.
+fn track_weights(placement: &Placement, columns: bool) -> Vec<f64> {
+    let count = if columns {
+        placement.columns
+    } else {
+        placement.rows
+    } as usize;
+    let mut weight = vec![0.0; count];
+    for cell in &placement.cells {
+        let (start, span) = if columns {
+            (cell.column, cell.col_span)
+        } else {
+            (cell.row, cell.row_span)
+        };
+        let share = cell.emphasis / span.max(1) as f64;
+        let end = ((start + span) as usize).min(count);
+        for slot in weight.iter_mut().take(end).skip(start as usize) {
+            if share > *slot {
+                *slot = share;
+            }
+        }
+    }
+    let known: Vec<f64> = weight
+        .iter()
+        .copied()
+        .filter(|value| *value > 0.0)
+        .collect();
+    let fill = if known.is_empty() {
+        1.0
+    } else {
+        known.iter().sum::<f64>() / known.len() as f64
+    };
+    for slot in &mut weight {
+        if *slot <= 0.0 {
+            *slot = fill;
+        }
+    }
+    weight
+}
+
+fn tracks(weights: &[f64], span: f64, gap: f64) -> Vec<Track> {
+    if weights.is_empty() {
+        return Vec::new();
+    }
+    if weights.len() == 1 {
+        return vec![Track {
+            center: 0.0,
+            size: span,
+        }];
+    }
+    let sum = weights.iter().sum::<f64>().max(0.001);
+    let inner = (span - gap * (weights.len() as f64 - 1.0)).max(0.0);
+    let mut cursor = -span / 2.0;
+    weights
+        .iter()
+        .map(|weight| {
+            let size = inner * (weight / sum);
+            let center = cursor + size / 2.0;
+            cursor += size + gap;
+            Track { center, size }
+        })
+        .collect()
+}
+
+fn cover(tracks: &[Track], start: u32, span: u32) -> (f64, f64) {
+    let Some(first) = tracks.get(start as usize) else {
+        return (0.0, 0.0);
+    };
+    let last = tracks
+        .get((start + span.saturating_sub(1)) as usize)
+        .unwrap_or(first);
+    let left = first.center - first.size / 2.0;
+    let right = last.center + last.size / 2.0;
+    ((left + right) / 2.0, (right - left).max(0.0))
 }
 
 fn group_pose(
@@ -775,7 +864,10 @@ fn group_pose(
         let held = project(params, world_x, 0.05, params.panel_anchor_y);
         let on_axis = world_x.abs() < 0.25;
         Some(GroupPose {
-            x: held.as_ref().map(|screen| screen.x).unwrap_or(params.vanish_x),
+            x: held
+                .as_ref()
+                .map(|screen| screen.x)
+                .unwrap_or(params.vanish_x),
             y: if on_axis {
                 params.foreground_y + 0.04 * travel
             } else {
@@ -880,10 +972,18 @@ fn hang_door(
             view.x += slide;
         }
     }
-    for marker in sink.markers.iter_mut().filter(|marker| marker.path_id == path_id) {
+    for marker in sink
+        .markers
+        .iter_mut()
+        .filter(|marker| marker.path_id == path_id)
+    {
         marker.x += slide;
     }
-    for ribbon in sink.ribbons.iter_mut().filter(|ribbon| ribbon.path_id == path_id) {
+    for ribbon in sink
+        .ribbons
+        .iter_mut()
+        .filter(|ribbon| ribbon.path_id == path_id)
+    {
         for sample in &mut ribbon.samples {
             sample.center_x += slide;
             sample.left_x += slide;
@@ -924,10 +1024,18 @@ fn hang_door(
             view.z_index += bias;
         }
     }
-    for marker in sink.markers.iter_mut().filter(|marker| marker.path_id == path_id) {
+    for marker in sink
+        .markers
+        .iter_mut()
+        .filter(|marker| marker.path_id == path_id)
+    {
         marker.x = fold_x(marker.x, hinge_x, yaw);
     }
-    for ribbon in sink.ribbons.iter_mut().filter(|ribbon| ribbon.path_id == path_id) {
+    for ribbon in sink
+        .ribbons
+        .iter_mut()
+        .filter(|ribbon| ribbon.path_id == path_id)
+    {
         for sample in &mut ribbon.samples {
             sample.center_x = fold_x(sample.center_x, hinge_x, yaw);
             sample.left_x = fold_x(sample.left_x, hinge_x, yaw);

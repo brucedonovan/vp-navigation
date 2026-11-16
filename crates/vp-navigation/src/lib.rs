@@ -18,7 +18,9 @@ mod params;
 mod project;
 
 pub use error::NavError;
-pub use graph::{Branch, BranchSpec, Graph, GraphBuilder, Node, Orientation, Path, Side, View};
+pub use graph::{
+    Branch, BranchSpec, Graph, GraphBuilder, Grid, Node, Orientation, Path, Side, View,
+};
 pub use navigate::{
     NavState, Navigator, PendingView, StateBranch, StateNode, TurnDirection, TurnView,
 };

@@ -4,9 +4,11 @@ vp-navigation is a camera and a graph. A host owns the content. The core replies
 
 ## The graph
 
-A path is an ordered list of stops. A stop has an id, a label, an orientation, and any number of views. A view has an id and an emphasis. Emphasis is a share of that stop's front. `50` and `50` split it in half. A stop with no views listed is one view at full emphasis.
+A path is an ordered list of stops. A stop has an id, a label, and any number of views. A view has an id and an emphasis. Emphasis is a share of that stop's front. Shares are normalized, so `50` and `50` split a row in half. A stop with no views listed is one view at full emphasis.
 
-`orientation` is `horizontal` (columns, opening left and right) or `vertical` (rows, opening up and down). Three or more views travel outward along that axis as you walk past them. How far is the `explode` setting.
+Views sit in a grid. The grid is measured in viewport fractions, so the same columns and rows fill the front on any stage size. With no grid of its own, a stop is a single line: `orientation` `horizontal` is one row of columns, `vertical` is one column of rows. Set `grid.columns` and `grid.rows` for any other arrangement. A view can name its cell with `column` and `row` (both 1-based) and cover more than one cell with `colSpan` and `rowSpan`. Views that name neither flow left to right, then down, into the next free cell.
+
+Walking through a grid throws every view outward from the center, in proportion to where it sits, and fades it. A single view is the center, so it fades in place. How far the outer views travel is the `explode` setting.
 
 A branch joins a child path to one stop on a parent, on the `left` or the `right`. The child path's views stay out of the frame until the traveler turns onto it. What the host shows before the turn is the branch hint: the link's label, side, and screen position.
 
@@ -45,6 +47,22 @@ Stops do not carry HTML, meshes, or copy. The same graph can drive a DOM page, a
       "toPath": "side",
       "side": "right"
     }
+  ]
+}
+```
+
+A grid stop names its own cells. This one is three columns by two rows. The wide cell covers the top-left pair, and the side cell covers both rows. The other two views flow into the cells that are left.
+
+```json
+{
+  "id": "mosaic",
+  "label": "Mosaic",
+  "grid": { "columns": 3, "rows": 2 },
+  "views": [
+    { "id": "wide", "emphasis": 60, "column": 1, "row": 1, "colSpan": 2 },
+    { "id": "side", "emphasis": 40, "column": 3, "row": 1, "rowSpan": 2 },
+    { "id": "low", "emphasis": 30 },
+    { "id": "mid", "emphasis": 30 }
   ]
 }
 ```

@@ -66,7 +66,9 @@ pub struct Params {
     pub front_height: f64,
     /// Gap between views of the same stop, as a viewport fraction.
     pub view_gap: f64,
-    /// How far, in viewport fractions, an outer view travels as you walk past it.
+    /// How far, in viewport fractions, a view at the edge of its grid travels
+    /// as you walk past the stop. Every view moves outward from the center
+    /// in proportion to where it sits, and fades. A single view is the center.
     pub explode: f64,
     /// Retained so existing projection JSON still loads. The junction swing
     /// is [`branch_angle_deg`](Params::branch_angle_deg).

@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 use crate::error::NavError;
-use crate::graph::{BranchSpec, Graph, GraphBuilder, Node, Orientation, Side, View};
+use crate::graph::{BranchSpec, Graph, GraphBuilder, Grid, Node, Orientation, Side, View};
 use crate::params::Params;
 
 #[derive(Debug, Deserialize)]
@@ -29,13 +29,37 @@ struct NodeConfig {
     #[serde(default)]
     orientation: Orientation,
     #[serde(default)]
+    grid: Option<GridConfig>,
+    #[serde(default)]
     views: Vec<ViewConfig>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GridConfig {
+    #[serde(default)]
+    columns: Option<u32>,
+    #[serde(default)]
+    rows: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ViewConfig {
     id: String,
     emphasis: f64,
+    #[serde(default)]
+    column: Option<u32>,
+    #[serde(default)]
+    row: Option<u32>,
+    #[serde(default = "one_span")]
+    col_span: u32,
+    #[serde(default = "one_span")]
+    row_span: u32,
+}
+
+fn one_span() -> u32 {
+    1
 }
 
 impl NodeConfig {
@@ -47,12 +71,20 @@ impl NodeConfig {
             id: self.id,
             label: self.label,
             orientation: self.orientation,
+            grid: self.grid.map(|grid| Grid {
+                columns: grid.columns,
+                rows: grid.rows,
+            }),
             views: self
                 .views
                 .into_iter()
                 .map(|view| View {
                     id: view.id,
                     emphasis: view.emphasis,
+                    column: view.column,
+                    row: view.row,
+                    col_span: view.col_span,
+                    row_span: view.row_span,
                 })
                 .collect(),
         }

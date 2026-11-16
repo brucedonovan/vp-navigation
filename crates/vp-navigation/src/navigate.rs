@@ -99,7 +99,9 @@ enum Wheel {
         accum: f64,
     },
     /// The impulse was a flick. Later deltas from the same burst are inertia.
-    Swallow { sign: f64 },
+    Swallow {
+        sign: f64,
+    },
 }
 
 const WHEEL_QUIET_S: f64 = 0.14;
@@ -315,7 +317,11 @@ impl Navigator {
     fn scroll_by(&mut self, delta: f64) {
         if self.dwell_left > 0.0 {
             let going_forward = self.target > self.hold_at + 1e-6;
-            let same_way = if going_forward { delta > 0.0 } else { delta < 0.0 };
+            let same_way = if going_forward {
+                delta > 0.0
+            } else {
+                delta < 0.0
+            };
             if same_way {
                 let max = self.path_max(&self.path_id);
                 self.target = (self.target + delta).clamp(0.0, max);
@@ -404,7 +410,11 @@ impl Navigator {
             .map(|(_, d)| d.abs())
             .sum();
         if late >= 0.08 && late + 1e-9 >= early * 0.5 {
-            self.wheel = Wheel::Drag { origin, sign, accum };
+            self.wheel = Wheel::Drag {
+                origin,
+                sign,
+                accum,
+            };
             self.dwell_left = 0.0;
             self.aim(origin + accum);
         } else if late < 0.08 || late + 1e-9 < early * 0.35 {
@@ -430,7 +440,11 @@ impl Navigator {
             return;
         };
         let accum = accum + delta;
-        self.wheel = Wheel::Drag { origin, sign, accum };
+        self.wheel = Wheel::Drag {
+            origin,
+            sign,
+            accum,
+        };
         self.dwell_left = 0.0;
         self.aim(origin + accum);
     }
@@ -683,8 +697,8 @@ impl Navigator {
     /// their current values, so a host can change `spring` without restating
     /// the camera. The same object is accepted as `projection` in the config.
     pub fn set_projection_json(&mut self, json: &str) -> Result<(), NavError> {
-        let patch: serde_json::Value = serde_json::from_str(json)
-            .map_err(|err| NavError::InvalidConfig(err.to_string()))?;
+        let patch: serde_json::Value =
+            serde_json::from_str(json).map_err(|err| NavError::InvalidConfig(err.to_string()))?;
         let serde_json::Value::Object(patch) = patch else {
             return Err(NavError::InvalidConfig(
                 "projection settings must be a JSON object".into(),
@@ -693,7 +707,9 @@ impl Navigator {
         let mut current = serde_json::to_value(&self.params)
             .map_err(|err| NavError::InvalidConfig(err.to_string()))?;
         let Some(object) = current.as_object_mut() else {
-            return Err(NavError::InvalidConfig("projection settings are unreadable".into()));
+            return Err(NavError::InvalidConfig(
+                "projection settings are unreadable".into(),
+            ));
         };
         for (key, value) in patch {
             object.insert(key, value);
@@ -719,7 +735,11 @@ impl Navigator {
     /// How long to hold on a stop the camera would pass through.
     /// `0` turns the hold off. Values are clamped to `0..=4000` milliseconds.
     pub fn set_dwell_ms(&mut self, ms: f64) {
-        self.params.dwell_ms = if ms.is_finite() { ms.clamp(0.0, 4_000.0) } else { 0.0 };
+        self.params.dwell_ms = if ms.is_finite() {
+            ms.clamp(0.0, 4_000.0)
+        } else {
+            0.0
+        };
         if self.params.dwell_ms == 0.0 {
             self.dwell_left = 0.0;
         }
@@ -942,10 +962,18 @@ impl Navigator {
         }
         let stop = if to > from {
             let stop = from.floor() + 1.0;
-            if stop <= to + 1e-8 { stop } else { return None; }
+            if stop <= to + 1e-8 {
+                stop
+            } else {
+                return None;
+            }
         } else {
             let stop = from.ceil() - 1.0;
-            if stop + 1e-8 >= to { stop } else { return None; }
+            if stop + 1e-8 >= to {
+                stop
+            } else {
+                return None;
+            }
         };
         if (self.target - stop).abs() < 0.02 {
             return None;

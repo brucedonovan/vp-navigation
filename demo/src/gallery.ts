@@ -3,6 +3,10 @@ import type { NodeContent } from "../../packages/dom/src/index";
 export interface ViewCopy {
   id: string;
   emphasis: number;
+  column?: number;
+  row?: number;
+  colSpan?: number;
+  rowSpan?: number;
   kicker?: string;
   title?: string;
   body?: string;
@@ -12,6 +16,7 @@ export interface Stop {
   id: string;
   label: string;
   orientation: "horizontal" | "vertical";
+  grid?: { columns?: number; rows?: number };
   tone?: "alley";
   views: ViewCopy[];
 }
@@ -45,7 +50,7 @@ export const mainStops: Stop[] = [
       {
         id: "right",
         emphasis: 50,
-        body: "Two views at 50 emphasis share the front equally. Walk forward and they open left and right.",
+        body: "Two views at 50 emphasis share the front equally. Walk on and they burst outward and fade.",
       },
     ],
   },
@@ -63,7 +68,7 @@ export const mainStops: Stop[] = [
       {
         id: "bottom",
         emphasis: 50,
-        body: "The same half share, turned. These two open up and down as you pass through.",
+        body: "The same half share, turned. These two burst up and down, and fade, as you pass.",
       },
     ],
   },
@@ -89,7 +94,44 @@ export const mainStops: Stop[] = [
         id: "twenty",
         emphasis: 20,
         title: "Twenty.",
-        body: "Three or more explode outward.",
+        body: "A row leaves the same way as any other grid.",
+      },
+    ],
+  },
+  {
+    id: "lattice",
+    label: "Lattice",
+    orientation: "horizontal",
+    grid: { columns: 3, rows: 2 },
+    views: [
+      {
+        id: "wide",
+        emphasis: 60,
+        column: 1,
+        row: 1,
+        colSpan: 2,
+        kicker: "05  ·  Any grid",
+        title: "Columns, rows, spans.",
+        body: "Name the cells. What is left fills in. The whole front is still one stop.",
+      },
+      {
+        id: "side",
+        emphasis: 40,
+        column: 3,
+        row: 1,
+        rowSpan: 2,
+        title: "A tall cell.",
+        body: "This one spans both rows.",
+      },
+      {
+        id: "low",
+        emphasis: 30,
+        title: "Then it bursts.",
+      },
+      {
+        id: "mid",
+        emphasis: 30,
+        body: "Walk on. Every cell leaves the center and fades.",
       },
     ],
   },
@@ -101,7 +143,7 @@ export const mainStops: Stop[] = [
       {
         id: "wheel",
         emphasis: 40,
-        kicker: "05  ·  Input",
+        kicker: "06  ·  Input",
         title: "Wheel.",
         body: "Walks you along the path.",
       },
@@ -127,7 +169,7 @@ export const mainStops: Stop[] = [
       {
         id: "end",
         emphasis: 100,
-        kicker: "06  ·  Horizon",
+        kicker: "07  ·  Horizon",
         title: "You do not arrive.",
         body: "The point stays a point. The views are only what the room holds out to you on the way there.",
       },
@@ -181,7 +223,15 @@ export function galleryConfig() {
       id: stop.id,
       label: stop.label,
       orientation: stop.orientation,
-      views: stop.views.map((view) => ({ id: view.id, emphasis: view.emphasis })),
+      ...(stop.grid ? { grid: stop.grid } : {}),
+      views: stop.views.map((view) => ({
+        id: view.id,
+        emphasis: view.emphasis,
+        ...(view.column != null ? { column: view.column } : {}),
+        ...(view.row != null ? { row: view.row } : {}),
+        ...(view.colSpan != null ? { colSpan: view.colSpan } : {}),
+        ...(view.rowSpan != null ? { rowSpan: view.rowSpan } : {}),
+      })),
     })),
   });
   return {
