@@ -18,12 +18,12 @@ mod params;
 mod project;
 
 pub use error::NavError;
-pub use graph::{Branch, BranchSpec, Graph, GraphBuilder, Node, Path, Side};
+pub use graph::{Branch, BranchSpec, Graph, GraphBuilder, Node, Orientation, Path, Side, View};
 pub use navigate::{
     NavState, Navigator, PendingView, StateBranch, StateNode, TurnDirection, TurnView,
 };
 pub use params::Params;
 pub use project::{
-    BranchHint, Frame, ProjectedMarker, ProjectedNode, ProjectedPanel, Ribbon, RibbonRole,
+    BranchHint, Frame, ProjectedMarker, ProjectedNode, ProjectedView, Ribbon, RibbonRole,
     RibbonSample,
 };

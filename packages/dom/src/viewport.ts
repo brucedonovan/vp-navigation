@@ -1,14 +1,18 @@
-import type { Frame, NavState, NavigatorPort, ProjectedPanel } from "./types";
+import type { Frame, NavState, NavigatorPort, ProjectedNode, ProjectedView } from "./types";
+
+export interface ViewContent {
+  id: string;
+  element: HTMLElement;
+}
 
 export interface NodeContent {
-  left: HTMLElement;
-  right: HTMLElement;
+  views: ViewContent[];
 }
 
 export interface ViewportOptions {
   root: HTMLElement;
   navigator: NavigatorPort;
-  /** Panel elements keyed by node id. Keys are mounted in insertion order. */
+  /** View elements keyed by node id, in column order. */
   content: Record<string, NodeContent>;
   /** Fires when the station, path, or available branch changes. */
   onChange?: (state: NavState) => void;
@@ -24,7 +28,17 @@ const BASE_CSS = `
 }
 .vp-glow, .vp-ribbon, .vp-layers, .vp-hints { position: absolute; inset: 0; }
 .vp-ribbon { width: 100%; height: 100%; overflow: visible; pointer-events: none; }
-.vp-layers, .vp-hints { transform-style: preserve-3d; pointer-events: none; }
+.vp-layers, .vp-hints {
+  pointer-events: none;
+  perspective: 1400px;
+  perspective-origin: var(--vx, 50%) var(--vy, 38%);
+}
+.vp-node {
+  position: absolute; left: 0; top: 0; width: 0; height: 0;
+  transform-origin: 0 0;
+  transform-style: preserve-3d;
+  pointer-events: none;
+}
 .vp-glow { pointer-events: none; }
 .vp-panel, .vp-hint {
   position: absolute; left: 0; top: 0;
@@ -64,7 +78,8 @@ export class DomViewport {
   private readonly hints: HTMLElement;
   private readonly stops: HTMLElement;
   private readonly live: HTMLElement;
-  private readonly panels = new Map<string, { left: HTMLElement; right: HTMLElement }>();
+  private readonly views = new Map<string, HTMLElement>();
+  private readonly groups = new Map<string, HTMLElement>();
   private readonly hintButtons = new Map<string, HTMLButtonElement>();
   private readonly mq = window.matchMedia("(prefers-reduced-motion: reduce)");
   private reducedOverride: boolean | null = null;
@@ -73,7 +88,13 @@ export class DomViewport {
   private raf = 0;
   private width = 1;
   private height = 1;
-  private touch: { y: number; ignore: boolean } | null = null;
+  private touch: {
+    y: number;
+    ignore: boolean;
+    origin: number;
+    accum: number;
+    t0: number;
+  } | null = null;
 
   constructor(options: ViewportOptions) {
     installBaseCss();
@@ -158,17 +179,20 @@ export class DomViewport {
   }
 
   private mount(id: string, content: NodeContent) {
-    for (const [side, el] of [
-      ["left", content.left],
-      ["right", content.right],
-    ] as const) {
-      el.classList.add("vp-panel", side === "left" ? "vp-panel-left" : "vp-panel-right");
+    const group = document.createElement("div");
+    group.className = "vp-node";
+    group.dataset.nodeId = id;
+    this.layers.append(group);
+    this.groups.set(id, group);
+    for (const view of content.views) {
+      const el = view.element;
+      el.classList.add("vp-panel");
       el.dataset.nodeId = id;
-      el.dataset.side = side;
+      el.dataset.viewId = view.id;
       el.addEventListener("click", () => this.activate(id));
-      this.layers.append(el);
+      group.append(el);
+      this.views.set(viewKey(id, view.id), el);
     }
-    this.panels.set(id, content);
   }
 
   private measure() {
@@ -191,18 +215,18 @@ export class DomViewport {
 
     const seen = new Set<string>();
     for (const node of frame.nodes) {
-      seen.add(node.id);
-      const els = this.panels.get(node.id);
-      if (!els) continue;
-      const left = node.panels.find((panel) => panel.side === "left");
-      const right = node.panels.find((panel) => panel.side === "right");
-      if (left) this.placePanel(els.left, left, node.interactive, node.active, w, h);
-      if (right) this.placePanel(els.right, right, node.interactive, node.active, w, h);
+      const group = this.groups.get(node.id);
+      if (group) this.placeGroup(group, node, w, h);
+      for (const view of node.views) {
+        const key = viewKey(node.id, view.id);
+        seen.add(key);
+        const el = this.views.get(key);
+        if (!el) continue;
+        this.placeView(el, view, node, w, h);
+      }
     }
-    for (const [id, els] of this.panels) {
-      if (seen.has(id)) continue;
-      this.hide(els.left);
-      this.hide(els.right);
+    for (const [key, el] of this.views) {
+      if (!seen.has(key)) this.hide(el);
     }
 
     this.svg.innerHTML = this.ribbonMarkup(frame, w, h);
@@ -212,26 +236,47 @@ export class DomViewport {
     this.publish(state);
   }
 
-  private placePanel(
+  private placeGroup(group: HTMLElement, node: ProjectedNode, w: number, h: number) {
+    const yaw = node.yaw || 0;
+    const hingeX = node.hingeX ?? node.x;
+    const hingeY = node.hingeY ?? node.y;
+    const z = node.views.reduce((highest, view) => Math.max(highest, view.zIndex), 0);
+    group.style.left = `${node.x * w}px`;
+    group.style.top = `${node.y * h}px`;
+    group.style.zIndex = String(z);
+    group.style.transformOrigin = `${((hingeX - node.x) * w).toFixed(2)}px ${((hingeY - node.y) * h).toFixed(2)}px`;
+    group.style.transform = `rotateY(${yaw.toFixed(2)}deg)`;
+  }
+
+  private placeView(
     el: HTMLElement,
-    panel: ProjectedPanel,
-    interactive: boolean,
-    active: boolean,
+    view: ProjectedView,
+    node: ProjectedNode,
     w: number,
     h: number,
   ) {
-    el.style.left = `${panel.x * w}px`;
-    el.style.top = `${panel.y * h}px`;
-    el.style.opacity = panel.opacity.toFixed(3);
-    el.style.zIndex = String(panel.zIndex);
-    el.style.transform = `translate(-50%, -50%) scale(${panel.scale.toFixed(4)}) rotateY(${panel.rotateY.toFixed(2)}deg)`;
-    el.style.pointerEvents = interactive ? "auto" : "none";
-    el.classList.toggle("is-active", active);
+    const yaw = node.yaw || 0;
+    // The group owns the camera yaw, so the columns stay on one plane.
+    const spinY = view.rotateY - yaw;
+    el.style.left = `${(view.x - node.x) * w}px`;
+    el.style.top = `${(view.y - node.y) * h}px`;
+    el.style.width = `${Math.max(view.width, 0) * w}px`;
+    el.style.height = `${Math.max(view.height, 0) * h}px`;
+    el.style.opacity = view.opacity.toFixed(3);
+    el.style.zIndex = String(view.zIndex);
+    el.style.transform = `translate(-50%, -50%) rotateX(${view.rotateX.toFixed(2)}deg) rotateY(${spinY.toFixed(2)}deg)`;
+    el.style.pointerEvents = node.interactive && view.opacity > 0.4 ? "auto" : "none";
+    el.classList.toggle("is-active", node.active);
+    // Content the host mounted for another path is omitted from the frame.
+    // Anything this faint is not part of the room a reader is in yet.
+    if (view.opacity < 0.05) el.setAttribute("aria-hidden", "true");
+    else el.removeAttribute("aria-hidden");
   }
 
   private hide(el: HTMLElement) {
     el.style.opacity = "0";
     el.style.pointerEvents = "none";
+    el.setAttribute("aria-hidden", "true");
   }
 
   private ribbonMarkup(frame: Frame, w: number, h: number): string {
@@ -383,7 +428,7 @@ export class DomViewport {
     if (event.deltaMode === 1) dy *= 16;
     else if (event.deltaMode === 2) dy *= window.innerHeight;
     const delta = clamp(dy / 130, -1.5, 1.5);
-    if (delta !== 0) this.nav.moveBy(delta);
+    if (delta !== 0) this.nav.scroll(performance.now(), delta);
   };
 
   private onKey = (event: KeyboardEvent) => {
@@ -436,9 +481,13 @@ export class DomViewport {
   private onTouchStart = (event: TouchEvent) => {
     if (event.touches.length !== 1) return;
     const target = event.target instanceof Element ? event.target : null;
+    const state = JSON.parse(this.nav.stateJson()) as NavState;
     this.touch = {
       y: event.touches[0].clientY,
       ignore: Boolean(target?.closest("button, a, .vp-stops")),
+      origin: state.target,
+      accum: 0,
+      t0: performance.now(),
     };
   };
 
@@ -449,11 +498,23 @@ export class DomViewport {
     const dy = this.touch.y - y;
     this.touch.y = y;
     const delta = clamp(dy / 170, -1.2, 1.2);
-    if (Math.abs(delta) > 0.001) this.nav.moveBy(delta);
+    if (Math.abs(delta) > 0.001) {
+      this.touch.accum += delta;
+      this.nav.moveBy(delta);
+    }
   };
 
   private onTouchEnd = () => {
+    const drag = this.touch;
     this.touch = null;
+    if (!drag || drag.ignore) return;
+    const distance = drag.accum;
+    if (Math.abs(distance) < 0.04) {
+      this.nav.park(drag.origin);
+      return;
+    }
+    const flick = performance.now() - drag.t0 < 260 && Math.abs(distance) < 1.15;
+    this.nav.park(flick ? drag.origin + Math.sign(distance) : Math.round(drag.origin + distance));
   };
 
   private focusEdge(start: boolean) {
@@ -488,6 +549,10 @@ export class DomViewport {
       // The core rejects commands that do not apply (busy turn, no parent).
     }
   }
+}
+
+function viewKey(nodeId: string, viewId: string) {
+  return `${nodeId}:${viewId}`;
 }
 
 function clamp(value: number, min: number, max: number) {

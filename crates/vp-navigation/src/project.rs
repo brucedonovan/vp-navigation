@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::graph::Side;
+use crate::graph::{Node, Orientation, Side};
 use crate::navigate::{Navigator, TurnKind};
 use crate::params::Params;
 
@@ -33,20 +33,42 @@ pub struct ProjectedNode {
     /// Depth of the stop's center along the camera axis, in stops.
     /// Negative values are behind the camera.
     pub depth: f64,
+    pub orientation: Orientation,
     pub active: bool,
     pub interactive: bool,
-    pub panels: Vec<ProjectedPanel>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProjectedPanel {
-    pub side: Side,
+    /// Screen center of the stop. Views are laid out around this point.
     pub x: f64,
     pub y: f64,
+    /// Degrees. Yaw the whole stop by this, around [`hinge_x`](ProjectedNode::hinge_x)
+    /// / [`hinge_y`](ProjectedNode::hinge_y). Use `rotateY - yaw` on each view
+    /// so the columns stay on that one plane.
+    pub yaw: f64,
+    /// Pivot of [`yaw`](ProjectedNode::yaw), in viewport fractions. The pivot
+    /// is the stop center, except during a turn: the viewer stands in the
+    /// middle, the face ahead is hinged on the far edge and opens outward, and
+    /// the face being entered is hinged on the near edge.
+    pub hinge_x: f64,
+    pub hinge_y: f64,
+    pub views: Vec<ProjectedView>,
+}
+
+/// One view of a stop, already laid out. `width` and `height` are viewport
+/// fractions and already include `scale`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectedView {
+    pub id: String,
+    /// The emphasis the author gave this view, before shares were normalized.
+    pub emphasis: f64,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
     pub scale: f64,
     pub opacity: f64,
-    /// Degrees. Positive rotateY turns the panel's right edge away from the viewer.
+    /// Degrees. Positive rotateX tips the top edge away from the viewer.
+    pub rotate_x: f64,
+    /// Degrees. Positive rotateY turns the right edge away from the viewer.
     pub rotate_y: f64,
     pub z_index: i32,
 }
@@ -133,7 +155,9 @@ pub(crate) fn build(nav: &Navigator) -> Frame {
             TurnKind::Enter => nav.position,
             TurnKind::Exit => turn.junction_index as f64,
         };
-        let parent_fade = (1.0 - turn.align).clamp(0.0, 1.0);
+        // The junction is a room of faces around the viewer. Turning rotates
+        // that room until the chosen face is the one in front.
+        let parent_fade = 1.0;
         {
             let mut sink = Sink {
                 nodes: &mut nodes,
@@ -147,6 +171,7 @@ pub(crate) fn build(nav: &Navigator) -> Frame {
                 turn.align,
                 turn.signed_angle,
                 parent_fade,
+                true,
                 RibbonRole::Active,
                 &mut sink,
             );
@@ -168,6 +193,10 @@ pub(crate) fn build(nav: &Navigator) -> Frame {
                 signed_angle: turn.signed_angle,
                 junction_depth,
                 fade: 1.0,
+                // The chosen face starts one step around the room and rotates
+                // forward with it. Opacity is not how the turn is shown.
+                include_views: true,
+                reveal: 1.0,
                 role: RibbonRole::Branch,
             },
             &mut sink,
@@ -186,6 +215,7 @@ pub(crate) fn build(nav: &Navigator) -> Frame {
                 0.0,
                 0.0,
                 1.0,
+                false,
                 RibbonRole::Active,
                 &mut sink,
             );
@@ -206,7 +236,9 @@ pub(crate) fn build(nav: &Navigator) -> Frame {
                         align: 0.0,
                         signed_angle: branch.signed_angle(params.branch_angle_rad()),
                         junction_depth,
-                        fade: 1.0,
+                        fade: 0.45,
+                        include_views: false,
+                        reveal: 0.0,
                         role: RibbonRole::Branch,
                     },
                     &mut sink,
@@ -241,6 +273,9 @@ fn push_straight(
     align: f64,
     signed_angle: f64,
     fade: f64,
+    // The camera is yawing away from this path. The stop it is leaving stays
+    // solid and turns as one plane; it is not the walk-past dissolve.
+    turning: bool,
     role: RibbonRole,
     sink: &mut Sink<'_>,
 ) {
@@ -248,19 +283,31 @@ fn push_straight(
         return;
     };
     let params = &nav.params;
-    let swing = -signed_angle * align;
+    // Laid out facing the camera. A turn then carries the whole face around
+    // the room, instead of dissolving the corridor.
+    let facing = 0.0;
 
     for (index, node) in path.nodes.iter().enumerate() {
         let depth = index as f64 - camera;
-        let (cx, cz) = rotate_xz(0.0, depth, swing);
-        let mut panels = Vec::with_capacity(2);
-        let mut interactive = false;
-        for (side, sign) in [(Side::Left, -1.0), (Side::Right, 1.0)] {
-            let (x, z) = rotate_xz(sign, depth, swing);
-            let panel = panel_from_world(params, side, sign, x, z, swing, fade);
-            interactive = interactive || panel_interactive(&panel, z);
-            panels.push(panel);
+        let (cx, mut cz) = (0.0, depth);
+        // A stop already behind the camera stays out. The yaw would otherwise
+        // swing it back into the frame and dissolve it across the turn.
+        if turning && depth < -0.5 {
+            cz = -SLIDE - 1.0;
         }
+        // Only the page underfoot stays solid. Stops further along the path
+        // keep their ordinary depth, so the turn does not stamp a full-size
+        // copy of every stop you have already passed.
+        let layout = project_views(
+            params,
+            node,
+            cx,
+            cz,
+            fade,
+            facing,
+            turning && depth.abs() < 0.45,
+            0,
+        );
         if let Some(center) = project(params, cx, cz, params.road_anchor_y) {
             let opacity = depth_opacity(cz, params) * fade;
             if opacity > 0.02 {
@@ -282,9 +329,15 @@ fn push_straight(
             path_id: path_id.to_string(),
             index,
             depth: cz,
+            orientation: node.orientation,
             active: false,
-            interactive,
-            panels,
+            interactive: layout.interactive,
+            x: layout.x,
+            y: layout.y,
+            yaw: layout.yaw,
+            hinge_x: layout.x,
+            hinge_y: layout.y,
+            views: layout.views,
         });
     }
 
@@ -292,7 +345,7 @@ fn push_straight(
     let mut z = 0.02;
     let far = (path.nodes.len() as f64 - camera + 1.6).clamp(2.4, params.max_depth);
     while z <= far {
-        if let Some(sample) = road_sample(params, z, swing, fade) {
+        if let Some(sample) = road_sample(params, z, 0.0, 0.0, fade) {
             samples.push(sample);
         }
         z += 0.26;
@@ -304,13 +357,36 @@ fn push_straight(
             samples,
         });
     }
+    if turning {
+        let sweep = signed_angle.abs().to_degrees();
+        let sign = signed_angle.signum();
+        // The viewer is inside the room. A branch on the right hinges this
+        // face on its left edge and opens it outward — the free edge swings
+        // away as the face turns off to the left.
+        // Slide toward the hinge so the face clears the middle, where the viewer stands.
+        let slide = -sign * params.front_width * 0.34 * align;
+        hang_door(
+            params,
+            path_id,
+            sign * sweep * align,
+            sign < 0.0,
+            slide,
+            sink,
+        );
+    }
 }
 
 struct Angled {
     align: f64,
     signed_angle: f64,
     junction_depth: f64,
+    /// Ribbon and floor markers. Independent of whether the views are shown.
     fade: f64,
+    /// When false, the child path contributes a floor only. Its views stay out
+    /// of the frame until a turn onto that path begins.
+    include_views: bool,
+    /// Multiplier for the child views during a turn. 0 at the doorway.
+    reveal: f64,
     role: RibbonRole,
 }
 
@@ -319,74 +395,98 @@ fn push_angled(nav: &Navigator, path_id: &str, angled: Angled, sink: &mut Sink<'
         return;
     };
     let params = &nav.params;
-    let remain = angled.signed_angle * (1.0 - angled.align);
 
-    for (index, node) in path.nodes.iter().enumerate() {
-        let distance = index as f64 + 1.0;
-        let (cx, cz) = branch_xz(distance, 0.0, &angled);
-        let mut panels = Vec::with_capacity(2);
-        let mut interactive = false;
-        for (side, sign) in [(Side::Left, -1.0), (Side::Right, 1.0)] {
-            let (x, z) = branch_xz(distance, sign, &angled);
-            let panel = panel_from_world(params, side, sign, x, z, remain, angled.fade);
-            interactive = interactive || panel_interactive(&panel, z);
-            panels.push(panel);
-        }
-        if let Some(center) = project(params, cx, cz, params.road_anchor_y) {
-            let opacity = depth_opacity(cz, params) * angled.fade;
-            if opacity > 0.02 {
-                sink.markers.push(ProjectedMarker {
-                    node_id: node.id.clone(),
-                    path_id: path_id.to_string(),
-                    x: center.x,
-                    y: center.y,
-                    half_width: params.road_half_width * center.scale,
-                    opacity,
-                    scale: center.scale,
-                    depth: cz,
-                });
+    // A branch the traveler has not turned into keeps its floor, so the
+    // opening reads as a way off, and withholds its views. Those views are
+    // the host's content — pages, scenes, whatever they mounted — and they
+    // belong to the child path. Once the turn starts, the branch is the next
+    // face of the room and rotates forward with it.
+    if angled.include_views {
+        for (index, node) in path.nodes.iter().enumerate() {
+            let cz = index as f64;
+            let layout = project_views(
+                params,
+                node,
+                0.0,
+                cz,
+                angled.fade * angled.reveal,
+                0.0,
+                index == 0,
+                0,
+            );
+            if let Some(center) = project(params, 0.0, cz, params.road_anchor_y) {
+                let opacity = depth_opacity(cz, params) * angled.fade;
+                if opacity > 0.02 {
+                    sink.markers.push(ProjectedMarker {
+                        node_id: node.id.clone(),
+                        path_id: path_id.to_string(),
+                        x: center.x,
+                        y: center.y,
+                        half_width: params.road_half_width * center.scale,
+                        opacity,
+                        scale: center.scale,
+                        depth: cz,
+                    });
+                }
             }
+            sink.nodes.push(ProjectedNode {
+                id: node.id.clone(),
+                label: node.label.clone(),
+                path_id: path_id.to_string(),
+                index,
+                depth: cz,
+                orientation: node.orientation,
+                active: false,
+                interactive: layout.interactive,
+                x: layout.x,
+                y: layout.y,
+                yaw: layout.yaw,
+                hinge_x: layout.x,
+                hinge_y: layout.y,
+                views: layout.views,
+            });
         }
-        sink.nodes.push(ProjectedNode {
-            id: node.id.clone(),
-            label: node.label.clone(),
-            path_id: path_id.to_string(),
-            index,
-            depth: cz,
-            active: false,
-            interactive,
-            panels,
-        });
     }
 
     let mut samples = Vec::new();
-    let max_s = path.nodes.len() as f64 + 0.2;
-    let mut s = 0.0;
-    let edge = params.road_half_width / params.lane;
-    while s <= max_s {
-        let (x, z) = branch_xz(s, 0.0, &angled);
-        let (lx, lz) = branch_xz(s, -edge, &angled);
-        let (rx, rz) = branch_xz(s, edge, &angled);
-        if let (Some(center), Some(left), Some(right)) = (
-            project(params, x, z, params.road_anchor_y),
-            project(params, lx, lz, params.road_anchor_y),
-            project(params, rx, rz, params.road_anchor_y),
-        ) {
-            let opacity = road_opacity(z, params) * angled.fade;
-            if opacity > 0.02 {
-                samples.push(RibbonSample {
-                    center_x: center.x,
-                    center_y: center.y,
-                    left_x: left.x,
-                    left_y: left.y,
-                    right_x: right.x,
-                    right_y: right.y,
-                    opacity,
-                    depth: z,
-                });
+    if angled.include_views {
+        let mut z = 0.02;
+        let far = (path.nodes.len() as f64 + 1.6).clamp(2.4, params.max_depth);
+        while z <= far {
+            if let Some(sample) = road_sample(params, z, 0.0, 0.0, angled.fade) {
+                samples.push(sample);
             }
+            z += 0.26;
         }
-        s += 0.26;
+    } else {
+        let max_s = path.nodes.len() as f64 + 0.2;
+        let mut s = 0.0;
+        let edge = params.road_half_width / params.lane;
+        while s <= max_s {
+            let (x, z) = branch_xz(s, 0.0, &angled);
+            let (lx, lz) = branch_xz(s, -edge, &angled);
+            let (rx, rz) = branch_xz(s, edge, &angled);
+            if let (Some(center), Some(left), Some(right)) = (
+                project(params, x, z, params.road_anchor_y),
+                project(params, lx, lz, params.road_anchor_y),
+                project(params, rx, rz, params.road_anchor_y),
+            ) {
+                let opacity = road_opacity(z, params) * angled.fade;
+                if opacity > 0.02 {
+                    samples.push(RibbonSample {
+                        center_x: center.x,
+                        center_y: center.y,
+                        left_x: left.x,
+                        left_y: left.y,
+                        right_x: right.x,
+                        right_y: right.y,
+                        opacity,
+                        depth: z,
+                    });
+                }
+            }
+            s += 0.26;
+        }
     }
     if samples.len() >= 2 {
         sink.ribbons.push(Ribbon {
@@ -394,6 +494,22 @@ fn push_angled(nav: &Navigator, path_id: &str, angled: Angled, sink: &mut Sink<'
             role: angled.role,
             samples,
         });
+    }
+    if angled.include_views {
+        let sweep = angled.signed_angle.abs().to_degrees();
+        let sign = angled.signed_angle.signum();
+        // Hinged on the near edge, so a right-hand alley starts folded at the
+        // right and opens inward onto the camera.
+        // Start out at the near side and arrive in front. The middle stays the viewer's.
+        let slide = sign * params.front_width * 0.55 * (1.0 - angled.align);
+        hang_door(
+            params,
+            path_id,
+            -sign * sweep * (1.0 - angled.align),
+            sign > 0.0,
+            slide,
+            sink,
+        );
     }
 }
 
@@ -408,9 +524,11 @@ fn hint_for(
         signed_angle: branch.signed_angle(params.branch_angle_rad()),
         junction_depth,
         fade: 1.0,
+        include_views: false,
+        reveal: 0.0,
         role: RibbonRole::Branch,
     };
-    let (x, z) = branch_xz(0.55, 0.0, &angled);
+    let (x, z) = branch_xz(0.7, 0.0, &angled);
     let screen = project(params, x, z, params.panel_anchor_y)?;
     let distance = branch.from_index as f64 - nav.position;
     let in_range = nav.turn.is_none() && distance.abs() <= params.ui_range;
@@ -421,6 +539,11 @@ fn hint_for(
     if opacity < 0.04 {
         return None;
     }
+    // Far away, the link recedes with the junction. Close up, it steps out
+    // to the side of the front composition so it stays a way through, not a
+    // label sitting on the host's views.
+    let near = smoothstep(1.0 - (junction_depth.abs() / params.ui_range.max(0.2)).clamp(0.0, 1.0));
+    let edge = (params.vanish_x + branch.side.sign() * (params.front_width * 0.5 + 0.045)).clamp(0.06, 0.94);
     Some(BranchHint {
         id: branch.id.clone(),
         label: branch.label.clone(),
@@ -429,19 +552,28 @@ fn hint_for(
         to_path: branch.to_path.clone(),
         distance,
         in_range,
-        x: screen.x,
-        y: screen.y,
+        x: lerp(screen.x, edge, near),
+        y: lerp(screen.y, params.foreground_y, near * 0.85),
         opacity,
-        scale: screen.scale,
+        scale: lerp(screen.scale, 1.0, near),
         z_index: z_index_for(z) + 40,
     })
 }
 
-fn road_sample(params: &Params, depth: f64, swing: f64, fade: f64) -> Option<RibbonSample> {
+fn road_sample(
+    params: &Params,
+    depth: f64,
+    swing: f64,
+    slide: f64,
+    fade: f64,
+) -> Option<RibbonSample> {
     let edge = params.road_half_width / params.lane;
-    let (cx, cz) = rotate_xz(0.0, depth, swing);
-    let (lx, lz) = rotate_xz(-edge, depth, swing);
-    let (rx, rz) = rotate_xz(edge, depth, swing);
+    let (mut cx, cz) = rotate_xz(0.0, depth, swing);
+    let (mut lx, lz) = rotate_xz(-edge, depth, swing);
+    let (mut rx, rz) = rotate_xz(edge, depth, swing);
+    cx += slide;
+    lx += slide;
+    rx += slide;
     let center = project(params, cx, cz, params.road_anchor_y)?;
     let left = project(params, lx, lz, params.road_anchor_y)?;
     let right = project(params, rx, rz, params.road_anchor_y)?;
@@ -461,49 +593,257 @@ fn road_sample(params: &Params, depth: f64, swing: f64, fade: f64) -> Option<Rib
     })
 }
 
-fn panel_from_world(
-    params: &Params,
-    side: Side,
-    side_sign: f64,
+/// How far, in stops, a page ahead of the camera eases open into the front layout.
+const APPROACH: f64 = 0.85;
+/// How far, in stops, the page you walk past keeps moving before it is gone.
+const SLIDE: f64 = 1.0;
+const SLIDE_GROW: f64 = 0.1;
+
+struct Slot {
+    id: String,
+    emphasis: f64,
+    dx: f64,
+    dy: f64,
+    width: f64,
+    height: f64,
+    /// Signed position along the orientation, about -1 at one edge and 1 at the other.
+    axis: f64,
+}
+
+struct GroupPose {
     x: f64,
+    y: f64,
+    scale: f64,
+    opacity: f64,
+    /// 0 while the views are still collapsed in the distance, 1 when the columns are open.
+    open: f64,
+    /// 0 at the camera, 1 when the views have finished leaving.
+    explode: f64,
+    z_index: i32,
+    yaw: f64,
+}
+
+struct Layout {
+    views: Vec<ProjectedView>,
+    interactive: bool,
+    x: f64,
+    y: f64,
+    yaw: f64,
+}
+
+fn project_views(
+    params: &Params,
+    node: &Node,
+    world_x: f64,
     z: f64,
-    path_angle: f64,
     fade: f64,
-) -> ProjectedPanel {
-    if let Some(screen) = project(params, x, z, params.panel_anchor_y) {
-        ProjectedPanel {
-            side,
-            x: screen.x,
-            y: screen.y,
-            scale: screen.scale,
-            opacity: (depth_opacity(z, params) * fade).clamp(0.0, 1.0),
-            rotate_y: -side_sign * 14.0 - path_angle.to_degrees() * 0.45,
-            z_index: z_index_for(z),
-        }
-    } else {
-        ProjectedPanel {
-            side,
+    path_angle: f64,
+    // Keep this page solid. Used for the stop a turn is leaving and the stop
+    // a turn is arriving on, so the yaw reads as a rotation rather than a fade.
+    solid: bool,
+    z_bias: i32,
+) -> Layout {
+    let slots = slots_for(params, node);
+    let Some(pose) = group_pose(params, world_x, z, fade, path_angle, solid, z_bias) else {
+        return Layout {
+            views: slots.iter().map(|slot| hidden_view(slot, params)).collect(),
+            interactive: false,
             x: params.vanish_x,
             y: params.vanish_y,
-            scale: 0.02,
-            opacity: 0.0,
-            rotate_y: 0.0,
-            z_index: 0,
-        }
+            yaw: 0.0,
+        };
+    };
+    let mut interactive = false;
+    let views = slots
+        .iter()
+        .map(|slot| {
+            let (ox, oy) = match node.orientation {
+                Orientation::Horizontal => (
+                    slot.dx * pose.open + slot.axis * params.explode * pose.explode,
+                    slot.dy * pose.open,
+                ),
+                Orientation::Vertical => (
+                    slot.dx * pose.open,
+                    slot.dy * pose.open + slot.axis * params.explode * pose.explode,
+                ),
+            };
+            let fit = pose.scale;
+            let opacity = pose.opacity;
+            if opacity > 0.4 && fit > 0.22 && (-0.05..3.8).contains(&z) {
+                interactive = true;
+            }
+            let spin = slot.axis * 14.0 * pose.explode;
+            let (rotate_x, rotate_y) = match node.orientation {
+                Orientation::Horizontal => (0.0, spin + pose.yaw),
+                Orientation::Vertical => (spin, pose.yaw),
+            };
+            ProjectedView {
+                id: slot.id.clone(),
+                emphasis: slot.emphasis,
+                x: pose.x + ox * fit,
+                y: pose.y + oy * fit,
+                width: slot.width * fit,
+                height: slot.height * fit,
+                scale: fit,
+                opacity,
+                rotate_x,
+                rotate_y,
+                z_index: pose.z_index,
+            }
+        })
+        .collect();
+    Layout {
+        views,
+        interactive,
+        x: pose.x,
+        y: pose.y,
+        yaw: pose.yaw,
     }
 }
 
-fn panel_interactive(panel: &ProjectedPanel, z: f64) -> bool {
-    panel.opacity > 0.4 && panel.scale > 0.22 && (-0.02..3.8).contains(&z)
+fn slots_for(params: &Params, node: &Node) -> Vec<Slot> {
+    if node.views.len() <= 1 {
+        let view = node.views.first();
+        return vec![Slot {
+            id: view.map(|view| view.id.clone()).unwrap_or_default(),
+            emphasis: view.map(|view| view.emphasis).unwrap_or(100.0),
+            dx: 0.0,
+            dy: 0.0,
+            width: params.front_width,
+            height: params.page_height,
+            axis: 0.0,
+        }];
+    }
+
+    let sum = node.views.iter().map(|view| view.emphasis).sum::<f64>().max(0.001);
+    let vertical = node.orientation == Orientation::Vertical;
+    let span = if vertical { params.front_height } else { params.front_width };
+    let gap = params.view_gap;
+    let inner = (span - gap * (node.views.len() as f64 - 1.0)).max(0.0);
+    let mut cursor = -span / 2.0;
+    node.views
+        .iter()
+        .map(|view| {
+            let share = inner * (view.emphasis / sum);
+            let center = cursor + share / 2.0;
+            cursor += share + gap;
+            let axis = if span > 0.001 { center / (span / 2.0) } else { 0.0 };
+            if vertical {
+                Slot {
+                    id: view.id.clone(),
+                    emphasis: view.emphasis,
+                    dx: 0.0,
+                    dy: center,
+                    width: params.front_width,
+                    height: share,
+                    axis,
+                }
+            } else {
+                Slot {
+                    id: view.id.clone(),
+                    emphasis: view.emphasis,
+                    dx: center,
+                    dy: 0.0,
+                    width: share,
+                    height: params.column_height,
+                    axis,
+                }
+            }
+        })
+        .collect()
+}
+
+fn group_pose(
+    params: &Params,
+    world_x: f64,
+    z: f64,
+    fade: f64,
+    path_angle: f64,
+    solid: bool,
+    z_bias: i32,
+) -> Option<GroupPose> {
+    if z < -SLIDE - 0.05 || z > params.max_depth + 1.5 {
+        return None;
+    }
+    // `path_angle` is the heading still left between this path and the camera.
+    // The whole stop yaws by that angle, so a turn reads as the camera rotating
+    // onto the branch rather than the pages fading in place.
+    let yaw = -path_angle.to_degrees();
+    if z < 0.0 {
+        let t = (-z / SLIDE).clamp(0.0, 1.0);
+        let travel = smoothstep(t);
+        let held = project(params, world_x, 0.05, params.panel_anchor_y);
+        let on_axis = world_x.abs() < 0.25;
+        Some(GroupPose {
+            x: held.as_ref().map(|screen| screen.x).unwrap_or(params.vanish_x),
+            y: if on_axis {
+                params.foreground_y + 0.04 * travel
+            } else {
+                held.map(|screen| screen.y).unwrap_or(params.foreground_y)
+            },
+            scale: 1.0 + SLIDE_GROW * travel,
+            opacity: if solid {
+                fade.clamp(0.0, 1.0)
+            } else {
+                ((1.0 - smoothstep(t)) * fade).clamp(0.0, 1.0)
+            },
+            open: 1.0,
+            explode: if solid { 0.0 } else { travel },
+            z_index: 2400 - (travel * 200.0).round() as i32 + z_bias,
+            yaw,
+        })
+    } else {
+        let screen = project(params, world_x, z, params.panel_anchor_y)?;
+        let open = smoothstep(1.0 - (z / APPROACH).clamp(0.0, 1.0));
+        Some(GroupPose {
+            x: screen.x,
+            y: lerp(screen.y, params.foreground_y, open),
+            scale: lerp(screen.scale, 1.0, open),
+            opacity: if solid {
+                fade.clamp(0.0, 1.0)
+            } else {
+                (depth_opacity(z, params) * fade).clamp(0.0, 1.0)
+            },
+            open,
+            explode: 0.0,
+            z_index: z_index_for(z) + z_bias,
+            yaw,
+        })
+    }
+}
+
+fn hidden_view(slot: &Slot, params: &Params) -> ProjectedView {
+    ProjectedView {
+        id: slot.id.clone(),
+        emphasis: slot.emphasis,
+        x: params.vanish_x,
+        y: params.vanish_y,
+        width: 0.02,
+        height: 0.02,
+        scale: 0.02,
+        opacity: 0.0,
+        rotate_x: 0.0,
+        rotate_y: 0.0,
+        z_index: 0,
+    }
+}
+
+fn lerp(from: f64, to: f64, t: f64) -> f64 {
+    from + (to - from) * t
+}
+
+fn smoothstep(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 fn mark_active(nodes: &mut [ProjectedNode]) {
     let mut best: Option<(usize, f64)> = None;
     for (index, node) in nodes.iter().enumerate() {
         let opacity = node
-            .panels
+            .views
             .iter()
-            .map(|panel| panel.opacity)
+            .map(|view| view.opacity)
             .fold(0.0_f64, f64::max);
         if opacity < 0.15 {
             continue;
@@ -516,6 +856,90 @@ fn mark_active(nodes: &mut [ProjectedNode]) {
     if let Some((index, _)) = best {
         nodes[index].active = true;
     }
+}
+
+/// Hang one face of the junction on an edge and yaw it, in degrees.
+///
+/// The viewer stands in the middle of the room. `hinge_right` picks the edge.
+/// A negative yaw brings the free edge toward the viewer, so the face opens
+/// inward. Stops that are not the face itself stay out of the turn.
+fn hang_door(
+    params: &Params,
+    path_id: &str,
+    yaw: f64,
+    hinge_right: bool,
+    slide: f64,
+    sink: &mut Sink<'_>,
+) {
+    if yaw.abs() < 0.4 && slide.abs() < 1e-4 {
+        return;
+    }
+    for node in sink.nodes.iter_mut().filter(|node| node.path_id == path_id) {
+        node.x += slide;
+        for view in &mut node.views {
+            view.x += slide;
+        }
+    }
+    for marker in sink.markers.iter_mut().filter(|marker| marker.path_id == path_id) {
+        marker.x += slide;
+    }
+    for ribbon in sink.ribbons.iter_mut().filter(|ribbon| ribbon.path_id == path_id) {
+        for sample in &mut ribbon.samples {
+            sample.center_x += slide;
+            sample.left_x += slide;
+            sample.right_x += slide;
+        }
+    }
+    let Some(front) = sink
+        .nodes
+        .iter()
+        .filter(|node| node.path_id == path_id && node.depth.abs() < 0.55)
+        .min_by(|a, b| {
+            a.depth
+                .abs()
+                .partial_cmp(&b.depth.abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    else {
+        return;
+    };
+    let scale = front.views.first().map(|view| view.scale).unwrap_or(1.0);
+    let half = params.front_width * scale * 0.5;
+    let hinge_x = front.x + if hinge_right { half } else { -half };
+    let hinge_y = front.y;
+    // The face that still presents itself to the viewer paints in front.
+    let bias = ((1.0 - (yaw.abs() / 90.0).clamp(0.0, 1.0)) * 520.0).round() as i32;
+    for node in sink.nodes.iter_mut().filter(|node| node.path_id == path_id) {
+        if node.depth.abs() > 0.55 {
+            for view in &mut node.views {
+                view.opacity = 0.0;
+            }
+            continue;
+        }
+        node.hinge_x = hinge_x;
+        node.hinge_y = hinge_y;
+        node.yaw = yaw;
+        for view in &mut node.views {
+            view.rotate_y += yaw;
+            view.z_index += bias;
+        }
+    }
+    for marker in sink.markers.iter_mut().filter(|marker| marker.path_id == path_id) {
+        marker.x = fold_x(marker.x, hinge_x, yaw);
+    }
+    for ribbon in sink.ribbons.iter_mut().filter(|ribbon| ribbon.path_id == path_id) {
+        for sample in &mut ribbon.samples {
+            sample.center_x = fold_x(sample.center_x, hinge_x, yaw);
+            sample.left_x = fold_x(sample.left_x, hinge_x, yaw);
+            sample.right_x = fold_x(sample.right_x, hinge_x, yaw);
+        }
+    }
+}
+
+/// Draw a screen x in toward `hinge` as a door yaws. `yaw` is degrees.
+fn fold_x(x: f64, hinge: f64, yaw: f64) -> f64 {
+    let c = yaw.to_radians().cos().abs().max(0.12);
+    hinge + (x - hinge) * c
 }
 
 /// Rotate a camera-space point around the camera. `angle` is yaw toward +x.

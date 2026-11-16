@@ -1,12 +1,20 @@
-/** Side of the path a panel or branch sits on. */
+/** Side of the path a branch sits on. */
 export type Side = "left" | "right";
 
-export interface ProjectedPanel {
-  side: Side;
+/** How a stop's views share the front, and which way they split. */
+export type Orientation = "horizontal" | "vertical";
+
+/** One view of a stop. `width` and `height` are viewport fractions and already include `scale`. */
+export interface ProjectedView {
+  id: string;
+  emphasis: number;
   x: number;
   y: number;
+  width: number;
+  height: number;
   scale: number;
   opacity: number;
+  rotateX: number;
   rotateY: number;
   zIndex: number;
 }
@@ -17,9 +25,21 @@ export interface ProjectedNode {
   pathId: string;
   index: number;
   depth: number;
+  orientation: Orientation;
   active: boolean;
   interactive: boolean;
-  panels: ProjectedPanel[];
+  /** Screen center of the stop. Views are laid out around this point. */
+  x: number;
+  y: number;
+  /**
+   * Degrees. Apply once to the whole stop, around `hingeX` / `hingeY`.
+   * Each view's `rotateY` includes this yaw; subtract it so the columns stay on one plane.
+   */
+  yaw: number;
+  /** Pivot of `yaw`, in viewport fractions. */
+  hingeX: number;
+  hingeY: number;
+  views: ProjectedView[];
 }
 
 export interface ProjectedMarker {
@@ -100,6 +120,8 @@ export interface NavState {
   position: number;
   target: number;
   atRest: boolean;
+  /** The camera is holding on a stop so its views can be read. */
+  holding: boolean;
   canReturn: boolean;
   returnLabel: string | null;
   currentNode: string;
@@ -122,12 +144,21 @@ export interface NavState {
 export interface NavigatorPort {
   tick(dtMs: number): void;
   moveBy(delta: number): void;
+  /** Wheel sample. A flick advances one stop; a sustained stream travels through. */
+  scroll(nowMs: number, delta: number): void;
+  /** Land on a stop after a drag, or on the one stop a touch flick asked for. */
+  park(stop: number): void;
   step(steps: number): void;
   focus(nodeId: string): void;
   activate(nodeId: string): void;
   takeBranch(branchId: string): void;
   returnToParent(): void;
   setReducedMotion(on: boolean): void;
+  /** Milliseconds to pause on each stop a scroll would pass through. `0` disables it. */
+  setDwellMs(ms: number): void;
+  /** Merge a partial projection object. Missing keys keep their current values. */
+  setProjection(json: string): void;
+  projectionJson(): string;
   stateJson(): string;
   frameJson(): string;
 }

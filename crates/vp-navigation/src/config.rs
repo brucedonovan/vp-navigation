@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 use crate::error::NavError;
-use crate::graph::{BranchSpec, Graph, GraphBuilder, Side};
+use crate::graph::{BranchSpec, Graph, GraphBuilder, Node, Orientation, Side, View};
 use crate::params::Params;
 
 #[derive(Debug, Deserialize)]
@@ -22,9 +22,41 @@ struct PathConfig {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct NodeConfig {
     id: String,
     label: String,
+    #[serde(default)]
+    orientation: Orientation,
+    #[serde(default)]
+    views: Vec<ViewConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ViewConfig {
+    id: String,
+    emphasis: f64,
+}
+
+impl NodeConfig {
+    fn into_node(self) -> Node {
+        if self.views.is_empty() {
+            return Node::single(self.id, self.label);
+        }
+        Node {
+            id: self.id,
+            label: self.label,
+            orientation: self.orientation,
+            views: self
+                .views
+                .into_iter()
+                .map(|view| View {
+                    id: view.id,
+                    emphasis: view.emphasis,
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,12 +77,8 @@ pub fn parse_config(json: &str) -> Result<(Graph, Params), NavError> {
 
     let mut builder = GraphBuilder::default().root(file.root_path);
     for path in file.paths {
-        let nodes = path
-            .nodes
-            .into_iter()
-            .map(|node| (node.id, node.label))
-            .collect();
-        builder = builder.path_owned(path.id, nodes);
+        let nodes = path.nodes.into_iter().map(NodeConfig::into_node).collect();
+        builder = builder.stops(path.id, nodes);
     }
     for branch in file.branches {
         builder = builder.branch(BranchSpec {

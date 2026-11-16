@@ -1,5 +1,5 @@
 export { DomViewport } from "./viewport";
-export type { NodeContent, ViewportOptions } from "./viewport";
+export type { NodeContent, ViewContent, ViewportOptions } from "./viewport";
 export type {
   BranchHint,
   Frame,
@@ -7,9 +7,10 @@ export type {
   NavigatorPort,
   ProjectedMarker,
   ProjectedNode,
-  ProjectedPanel,
+  ProjectedView,
   Ribbon,
   RibbonSample,
+  Orientation,
   Side,
   StateBranch,
   StateNode,

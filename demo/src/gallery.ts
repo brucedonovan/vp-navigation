@@ -1,130 +1,247 @@
 import type { NodeContent } from "../../packages/dom/src/index";
 
+export interface ViewCopy {
+  id: string;
+  emphasis: number;
+  kicker?: string;
+  title?: string;
+  body?: string;
+}
+
 export interface Stop {
   id: string;
   label: string;
-  kicker: string;
-  title: string;
-  body: string;
-  tone?: "annex";
+  orientation: "horizontal" | "vertical";
+  tone?: "alley";
+  views: ViewCopy[];
 }
 
 export const mainStops: Stop[] = [
   {
     id: "threshold",
     label: "Threshold",
-    kicker: "01  ·  Threshold",
-    title: "Stop scrolling.",
-    body: "This page does not run downward. It runs away from you, toward one point of light. What you can read is whatever is standing beside you.",
+    orientation: "horizontal",
+    views: [
+      {
+        id: "whole",
+        emphasis: 100,
+        kicker: "01  ·  One view",
+        title: "The whole front.",
+        body: "A stop can hold a single view. It takes the center — the full page you are standing in — and fades where it is when you walk on.",
+      },
+    ],
   },
   {
     id: "perspective",
     label: "One point",
-    kicker: "02  ·  One point",
-    title: "Everything meets.",
-    body: "A stop ahead is the same kind of page as this one — a title on the left, a note on the right — only smaller, because it is farther down the same floor.",
+    orientation: "horizontal",
+    views: [
+      {
+        id: "left",
+        emphasis: 50,
+        kicker: "02  ·  Even split",
+        title: "Side by side.",
+      },
+      {
+        id: "right",
+        emphasis: 50,
+        body: "Two views at 50 emphasis share the front equally. Walk forward and they open left and right.",
+      },
+    ],
   },
   {
     id: "stations",
     label: "Stations",
-    kicker: "03  ·  Stations",
-    title: "It stays where you leave it.",
-    body: "Nothing is replaced when you walk on. The room keeps every page. Turn around and the last one is still there, full size, once you are standing in front of it.",
+    orientation: "vertical",
+    views: [
+      {
+        id: "top",
+        emphasis: 50,
+        kicker: "03  ·  Up and down",
+        title: "One above the other.",
+      },
+      {
+        id: "bottom",
+        emphasis: 50,
+        body: "The same half share, turned. These two open up and down as you pass through.",
+      },
+    ],
   },
   {
     id: "junction",
     label: "Junction",
-    kicker: "04  ·  Junction",
-    title: "The room divides.",
-    body: "On your right the floor splits. That corridor is a branch: its own path, tied to this one. Step onto it while you are close. It is two rooms long, and it remembers the way back.",
+    orientation: "horizontal",
+    views: [
+      {
+        id: "half",
+        emphasis: 50,
+        kicker: "04  ·  Emphasis",
+        title: "Half.",
+        body: "This column holds half the front. The Alley opens to the right.",
+      },
+      {
+        id: "thirty",
+        emphasis: 30,
+        title: "Thirty.",
+        body: "A narrower share of the same stop.",
+      },
+      {
+        id: "twenty",
+        emphasis: 20,
+        title: "Twenty.",
+        body: "Three or more explode outward.",
+      },
+    ],
   },
   {
     id: "input",
     label: "Input",
-    kicker: "05  ·  Input",
-    title: "Whatever used to scroll.",
-    body: "The wheel and the trackpad walk you forward. Arrow keys step from stop to stop. A swipe is the wheel without a mouse. Click any page you can still see, and you go to it.",
+    orientation: "vertical",
+    views: [
+      {
+        id: "wheel",
+        emphasis: 40,
+        kicker: "05  ·  Input",
+        title: "Wheel.",
+        body: "Walks you along the path.",
+      },
+      {
+        id: "arrows",
+        emphasis: 30,
+        title: "Arrows.",
+        body: "Step from stop to stop.",
+      },
+      {
+        id: "click",
+        emphasis: 30,
+        title: "Click.",
+        body: "Any view you can still see.",
+      },
+    ],
   },
   {
     id: "horizon",
     label: "Horizon",
-    kicker: "06  ·  Horizon",
-    title: "You do not arrive.",
-    body: "The point stays a point. There is a direction to face, and the writing is simply what the room holds out to you on the way there.",
+    orientation: "horizontal",
+    views: [
+      {
+        id: "end",
+        emphasis: 100,
+        kicker: "06  ·  Horizon",
+        title: "You do not arrive.",
+        body: "The point stays a point. The views are only what the room holds out to you on the way there.",
+      },
+    ],
   },
 ];
 
-export const annexStops: Stop[] = [
+export const alleyStops: Stop[] = [
   {
     id: "alcove",
     label: "Alcove",
-    kicker: "A1  ·  Alcove",
-    title: "A quieter measurement.",
-    body: "A branch is a path with a parent. From here the long room is behind you. The core never sees this HTML. It only knows how far you are from each stop, and where that stop sits on the screen.",
-    tone: "annex",
+    orientation: "horizontal",
+    tone: "alley",
+    views: [
+      {
+        id: "wide",
+        emphasis: 60,
+        kicker: "Alley  ·  Alcove",
+        title: "Sixty.",
+        body: "Emphasis is a share of the front, not a count of pages. This is the alley you turned into.",
+      },
+      {
+        id: "rest",
+        emphasis: 40,
+        title: "Forty.",
+        body: "The long room is behind you. This path remembers the way back.",
+      },
+    ],
   },
   {
     id: "wayback",
     label: "Way back",
-    kicker: "A2  ·  Way back",
-    title: "Turn around.",
-    body: "Walk backward off the start of a branch, or press Escape. You are set down at the junction you left. The annex stays where it was, ready to be entered again.",
-    tone: "annex",
+    orientation: "horizontal",
+    tone: "alley",
+    views: [
+      {
+        id: "return",
+        emphasis: 100,
+        kicker: "Alley  ·  Way back",
+        title: "Turn around.",
+        body: "Walk backward off the start of a branch, or press Escape. You are set down at the junction you left.",
+      },
+    ],
   },
 ];
 
 export function galleryConfig() {
   const path = (id: string, stops: Stop[]) => ({
     id,
-    nodes: stops.map((stop) => ({ id: stop.id, label: stop.label })),
+    nodes: stops.map((stop) => ({
+      id: stop.id,
+      label: stop.label,
+      orientation: stop.orientation,
+      views: stop.views.map((view) => ({ id: view.id, emphasis: view.emphasis })),
+    })),
   });
   return {
     rootPath: "main",
-    paths: [path("main", mainStops), path("annex", annexStops)],
+    paths: [path("main", mainStops), path("alley", alleyStops)],
     branches: [
       {
-        id: "to-annex",
-        label: "The Annex",
+        id: "to-alley",
+        label: "The Alley",
         fromPath: "main",
         fromNode: "junction",
-        toPath: "annex",
+        toPath: "alley",
         side: "right",
       },
     ],
+    // Every field is optional. See docs/configuration.md.
+    projection: {
+      spring: 0.3,
+      springRange: 0.2,
+      dwellMs: 280,
+      frontWidth: 0.88,
+      pageHeight: 0.58,
+      turnExit: 2.6,
+    },
   };
 }
 
 export function galleryContent(): Record<string, NodeContent> {
   const content: Record<string, NodeContent> = {};
-  for (const stop of [...mainStops, ...annexStops]) {
+  for (const stop of [...mainStops, ...alleyStops]) {
     content[stop.id] = {
-      left: leftPanel(stop),
-      right: rightPanel(stop),
+      views: stop.views.map((view) => ({
+        id: view.id,
+        element: viewElement(stop, view),
+      })),
     };
   }
   return content;
 }
 
-function leftPanel(stop: Stop): HTMLElement {
+function viewElement(stop: Stop, view: ViewCopy): HTMLElement {
   const el = document.createElement("div");
-  if (stop.tone === "annex") el.classList.add("tone-annex");
-  const kicker = document.createElement("p");
-  kicker.className = "kicker";
-  kicker.textContent = stop.kicker;
-  const title = document.createElement("h2");
-  title.id = `${stop.id}-title`;
-  title.textContent = stop.title;
-  el.append(kicker, title);
-  el.setAttribute("aria-labelledby", title.id);
-  return el;
-}
-
-function rightPanel(stop: Stop): HTMLElement {
-  const el = document.createElement("div");
-  if (stop.tone === "annex") el.classList.add("tone-annex");
-  const body = document.createElement("p");
-  body.textContent = stop.body;
-  el.append(body);
-  el.setAttribute("aria-labelledby", `${stop.id}-title`);
+  if (stop.tone === "alley") el.classList.add("tone-alley");
+  if (view.kicker) {
+    const kicker = document.createElement("p");
+    kicker.className = "kicker";
+    kicker.textContent = view.kicker;
+    el.append(kicker);
+  }
+  if (view.title) {
+    const title = document.createElement("h2");
+    title.id = `${stop.id}-${view.id}-title`;
+    title.textContent = view.title;
+    el.append(title);
+    el.setAttribute("aria-labelledby", title.id);
+  }
+  if (view.body) {
+    const body = document.createElement("p");
+    body.textContent = view.body;
+    el.append(body);
+  }
   return el;
 }

@@ -23,7 +23,9 @@ pub struct Params {
     pub road_anchor_y: f64,
     /// Half-width of the path, as a viewport fraction, at the camera plane.
     pub road_half_width: f64,
-    /// Angle, in degrees, at which a branch leaves its parent. Right is positive.
+    /// Angle, in degrees, between adjacent faces of a junction. The viewer
+    /// stands in the middle of that room; 60 is one step of a hexagon. Right
+    /// is positive. Turning rotates the room by this angle.
     pub branch_angle_deg: f64,
     /// Exponential smoothing rate for travel along a path (1/seconds).
     pub stiffness: f64,
@@ -39,6 +41,36 @@ pub struct Params {
     pub ui_range: f64,
     /// Skip easing and commit turns immediately.
     pub reduced_motion: bool,
+    /// How long, in milliseconds, to hold the camera on a stop it would
+    /// otherwise pass through, so that stop's views sit still. `0` disables
+    /// the hold. Reduced motion ignores it.
+    pub dwell_ms: f64,
+    /// How strongly a finished scroll settles onto a nearby stop.
+    /// `0` leaves the target where the gesture ended. `1` settles quickly.
+    /// Scrolling itself is not gated by this.
+    pub spring: f64,
+    /// A finished scroll only settles when it is at most this many stops
+    /// from an integer stop. Further away, the target stays where it is.
+    pub spring_range: f64,
+    /// Milliseconds after the last wheel event before the settle begins.
+    pub spring_idle_ms: f64,
+    /// Vertical center of the stop you are standing on, as a viewport fraction.
+    pub foreground_y: f64,
+    /// Width of that stop's front, as a viewport fraction. Views share it by emphasis.
+    pub front_width: f64,
+    /// Height of a single view.
+    pub page_height: f64,
+    /// Height of each column in a horizontal stop.
+    pub column_height: f64,
+    /// Height shared by the rows of a vertical stop.
+    pub front_height: f64,
+    /// Gap between views of the same stop, as a viewport fraction.
+    pub view_gap: f64,
+    /// How far, in viewport fractions, an outer view travels as you walk past it.
+    pub explode: f64,
+    /// Retained so existing projection JSON still loads. The junction swing
+    /// is [`branch_angle_deg`](Params::branch_angle_deg).
+    pub turn_exit: f64,
 }
 
 impl Default for Params {
@@ -51,7 +83,7 @@ impl Default for Params {
             panel_anchor_y: 0.64,
             road_anchor_y: 0.8,
             road_half_width: 0.145,
-            branch_angle_deg: 34.0,
+            branch_angle_deg: 60.0,
             stiffness: 9.0,
             turn_stiffness: 5.5,
             max_depth: 10.0,
@@ -59,6 +91,18 @@ impl Default for Params {
             turn_start_distance: 0.22,
             ui_range: 0.85,
             reduced_motion: false,
+            dwell_ms: 280.0,
+            spring: 0.3,
+            spring_range: 0.2,
+            spring_idle_ms: 90.0,
+            foreground_y: 0.48,
+            front_width: 0.88,
+            page_height: 0.58,
+            column_height: 0.54,
+            front_height: 0.66,
+            view_gap: 0.016,
+            explode: 0.46,
+            turn_exit: 2.6,
         }
     }
 }
@@ -79,7 +123,20 @@ impl Params {
             && self.max_depth > 0.5
             && self.behind_limit < 0.0
             && self.turn_start_distance > 0.0
-            && self.ui_range > 0.0;
+            && self.ui_range > 0.0
+            && self.dwell_ms >= 0.0
+            && self.dwell_ms <= 4_000.0
+            && (0.0..=1.0).contains(&self.spring)
+            && (0.0..=0.5).contains(&self.spring_range)
+            && (0.0..=2_000.0).contains(&self.spring_idle_ms)
+            && (0.2..=0.95).contains(&self.foreground_y)
+            && (0.3..=1.05).contains(&self.front_width)
+            && (0.15..=0.9).contains(&self.page_height)
+            && (0.12..=0.9).contains(&self.column_height)
+            && (0.2..=0.95).contains(&self.front_height)
+            && (0.0..=0.08).contains(&self.view_gap)
+            && (0.0..=1.2).contains(&self.explode)
+            && (0.0..=6.0).contains(&self.turn_exit);
         if ok {
             Ok(())
         } else {

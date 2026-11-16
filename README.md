@@ -1,8 +1,10 @@
 # vp-navigation
 
-An experimental navigation framework. Instead of scrolling down a page, you walk a **path** that recedes to a vanishing point. Each stop keeps its page beside the path — a title on the left, a note on the right — and the stops ahead shrink toward a single point of light. A path can fork. You turn onto the branch, and you can walk back off it.
+An experimental navigation framework. Instead of scrolling down a page, you walk a **path** that recedes to a vanishing point. Each stop is a tick on that path, and it can hold as many views as you give it. One view takes the whole front. Two views share it — evenly, when each has emphasis 50 — and open left/right or up/down as you pass through. Three or more explode along that same direction. The stops ahead shrink toward a single point of light. A path can fork. You turn onto the branch, and you can walk back off it.
 
-The core is framework-agnostic. It is a Rust library, compiled to WebAssembly for the browser. Rendering is someone else's job: the DOM adapter in this repo is one consumer, and a small enough one that React, Svelte, a `<canvas>`, or a game engine can do the same work.
+The core is framework-agnostic. It is a Rust library, compiled to WebAssembly for the browser. Rendering is someone else's job: the DOM adapter in this repo is one consumer, and a small enough one that React, Svelte, a `<canvas>`, or a game engine can do the same work. Motion, view size, and the turn are settings. See [docs/configuration.md](docs/configuration.md).
+
+Licensed under [MIT](LICENSE).
 
 ## Run the demo
 
@@ -21,15 +23,15 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`. The demo is **The Long Room**: six stops and a side branch called The Annex.
+Open `http://localhost:5173`. The demo is **The Long Room**: six stops and a side path called The Alley. The Alley's views stay off the main path. The link is what you see, and taking it turns you in.
 
 | Input | What it does |
 | --- | --- |
-| Wheel / trackpad | Walk along the path. The page itself does not scroll. |
+| Wheel / trackpad | A flick advances one stop, like a key press. Keep scrolling, or hold the wheel, and you travel smoothly through the stops. The page itself does not scroll. |
 | Arrow keys, Page Up / Down, Space | Step one stop. |
-| Swipe | Same as the wheel. |
+| Swipe | A short flick advances one stop. A drag follows your finger through the stops and lands on the nearest one. |
 | Click a page, or a stop in the index | Walk there. Clicking a page on a branch turns onto it. |
-| Enter, or **Enter the Annex** | Take the branch, once you are near the junction. |
+| Enter, or **Enter the Alley** | Take the branch, once you are near the junction. |
 | Escape, Backspace, or walking back off the first branch stop | Return to the junction you left. |
 | Home / End | First or last stop of the path you are on. |
 
@@ -59,10 +61,10 @@ demo/                        The Long Room
 
 The core owns:
 
-- **The graph.** Paths are ordered stops. A branch joins a child path to one stop on a parent. Stops have an id and a label. They do not have HTML, meshes, or textures.
+- **The graph.** Paths are ordered stops. A branch joins a child path to one stop on a parent. A stop has an id, a label, an orientation (`horizontal` or `vertical`), and any number of views. Each view has an id and an emphasis, a percentage share of that stop's front. Shares are normalized, so 50 and 50 split it in half. A stop with no views listed is one view at full emphasis. Stops do not have HTML, meshes, or textures.
 - **Navigation state.** `position` is the eased camera, in stops. `target` is where input asked to go. Integer positions stand on a stop. `take_branch` walks you to the junction, then turns; walking back off a branch returns you to that junction.
-- **Easing.** `tick(dt)` damps `position` toward `target`, and damps a turn from the parent frame onto the branch. Reduced motion commits both immediately.
-- **Projection.** For every visible stop it emits viewport-fraction transforms: position, scale, opacity, z-order, and a small yaw. It also emits the path ribbon (the floor running to the vanishing point) and branch hints. One-point perspective is `scale = focal / (focal + depth)`. A panel at the camera has scale 1; panels ahead slide toward the vanishing point and shrink.
+- **Easing.** `tick(dt)` damps `position` toward `target`, and damps a turn from the parent frame onto the branch. `scroll(now, delta)` treats a short impulse as one stop and a sustained stream as smooth travel through later stops. `dwellMs` (default 280) holds briefly on each stop a sustained travel passes. After the wheel goes quiet, `spring` settles a nearby target onto its stop. Set `spring` or `dwellMs` to `0` to turn that behavior off. Reduced motion commits travel and turns immediately. At a junction the viewer stands in the middle. Taking a branch on the right opens the path ahead outward to the left, and the chosen path enters from the right. Both faces stay solid. The swing is `branchAngleDeg` (60 is one step of a hexagon).
+- **Projection.** For every visible view it emits viewport-fraction transforms: position, width, height, scale, opacity, z-order, and a small tilt. It also emits the path ribbon (the floor running to the vanishing point) and branch hints. One-point perspective is `scale = focal / (focal + depth)`. The stop you are standing on opens across most of the frame, divided by emphasis. Walking through a pair splits it along its orientation. Walking through three or more throws them outward along that line, and they fade. Stops ahead shrink toward the vanishing point. `width` and `height` already include `scale`. A branch's views are not in the frame while you are on the parent — only its hint, the link the host labeled. Turning swings that path onto the camera and brings those views in. What a view contains is entirely the host's.
 
 The DOM adapter (`DomViewport`) is deliberately thin. Each frame it reads `frameJson()`, writes CSS transforms, and forwards wheel, keyboard, touch, and clicks back into the core. Screen-reader text is the real DOM, in path order, not a canvas. A live region announces the current stop.
 
@@ -126,7 +128,7 @@ function frame() {
 }
 ```
 
-`projection` in that JSON is optional. It overrides focal length, vanishing point, lane width, branch angle, and easing. See `Params` in `crates/vp-navigation/src/params.rs`.
+`projection` in that JSON is optional. Any field you omit keeps its default, and the same object can be applied later with `setProjection`. The full list, with defaults and ranges, is in [docs/configuration.md](docs/configuration.md). How a host supplies its own views is in [docs/integrating.md](docs/integrating.md).
 
 ### Wiring another UI framework
 
@@ -151,13 +153,16 @@ function usePath(nav: VpNavigator) {
 }
 
 // <article style={{
-//   transform: `translate(${panel.x * width}px, ${panel.y * height}px) scale(${panel.scale})`,
-//   opacity: panel.opacity,
-//   zIndex: panel.zIndex,
+//   left: view.x * width,
+//   top: view.y * height,
+//   width: view.width * width,
+//   height: view.height * height,
+//   opacity: view.opacity,
+//   zIndex: view.zIndex,
 // }} />
 ```
 
-Wheel handling stays in the host: call `moveBy(deltaY / 130)` and `preventDefault()` so the document does not scroll. Call `step(±1)` from the keyboard, `activate(nodeId)` when a page is clicked, `takeBranch(id)` at a junction, and `returnToParent()` to leave. Call `setReducedMotion(true)` when `prefers-reduced-motion: reduce` matches.
+Wheel handling stays in the host: call `scroll(performance.now(), deltaY / 130)` and `preventDefault()` so the document does not scroll. A flick then advances one stop; keep sending samples while the wheel is held and the traveler moves through the stops. Call `step(±1)` from the keyboard, `activate(nodeId)` when a page is clicked, `takeBranch(id)` at a junction, and `returnToParent()` to leave. Call `setReducedMotion(true)` when `prefers-reduced-motion: reduce` matches.
 
 Content is not the core's problem. Key your components by node id and let the frame tell you where they sit.
 

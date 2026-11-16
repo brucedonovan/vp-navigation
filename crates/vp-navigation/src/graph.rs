@@ -21,12 +21,49 @@ impl Side {
     }
 }
 
-/// A stop on a path. Content (HTML, meshes, textures) lives in the renderer;
-/// the core only knows the id and a label for accessibility.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// How a stop's views share the front, and which way they split as you pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Orientation {
+    /// Columns. Two views open left and right. More views explode along that line.
+    #[default]
+    Horizontal,
+    /// Rows. Two views open up and down. More views explode along that line.
+    Vertical,
+}
+
+/// One column or row of a stop. `emphasis` is a percentage share of the front.
+/// Shares are normalized, so 50 and 50 split the front in half.
+#[derive(Debug, Clone, PartialEq)]
+pub struct View {
+    pub id: String,
+    pub emphasis: f64,
+}
+
+/// A stop on a path. Markup stays in the renderer. The core knows which views
+/// share the front, and how that front is oriented.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Node {
     pub id: String,
     pub label: String,
+    pub orientation: Orientation,
+    pub views: Vec<View>,
+}
+
+impl Node {
+    /// A stop with one view that takes the whole front.
+    pub fn single(id: impl Into<String>, label: impl Into<String>) -> Self {
+        let id = id.into();
+        Self {
+            label: label.into(),
+            orientation: Orientation::Horizontal,
+            views: vec![View {
+                id: id.clone(),
+                emphasis: 100.0,
+            }],
+            id,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -149,11 +186,16 @@ impl GraphBuilder {
         self.path_owned(id, owned)
     }
 
-    pub fn path_owned(mut self, id: impl Into<String>, nodes: Vec<(String, String)>) -> Self {
+    pub fn path_owned(self, id: impl Into<String>, nodes: Vec<(String, String)>) -> Self {
         let nodes = nodes
             .into_iter()
-            .map(|(id, label)| Node { id, label })
+            .map(|(id, label)| Node::single(id, label))
             .collect();
+        self.stops(id, nodes)
+    }
+
+    /// Add a path whose stops already name their views.
+    pub fn stops(mut self, id: impl Into<String>, nodes: Vec<Node>) -> Self {
         self.paths.push((id.into(), nodes));
         self
     }
@@ -188,6 +230,7 @@ impl GraphBuilder {
                         "path '{id}' has a stop with an empty id"
                     )));
                 }
+                validate_views(&id, node)?;
                 if nodes.contains_key(&node.id) {
                     return Err(NavError::InvalidConfig(format!(
                         "duplicate node '{}'",
@@ -315,6 +358,37 @@ impl GraphBuilder {
         graph.assert_no_cycle()?;
         Ok(graph)
     }
+}
+
+fn validate_views(path_id: &str, node: &Node) -> Result<(), NavError> {
+    if node.views.is_empty() {
+        return Err(NavError::InvalidConfig(format!(
+            "stop '{}' on path '{path_id}' has no views",
+            node.id
+        )));
+    }
+    let mut seen = HashSet::new();
+    for view in &node.views {
+        if view.id.is_empty() {
+            return Err(NavError::InvalidConfig(format!(
+                "stop '{}' on path '{path_id}' has a view with an empty id",
+                node.id
+            )));
+        }
+        if !seen.insert(view.id.as_str()) {
+            return Err(NavError::InvalidConfig(format!(
+                "stop '{}' has a duplicate view '{}'",
+                node.id, view.id
+            )));
+        }
+        if !(view.emphasis > 0.0 && view.emphasis <= 100.0) {
+            return Err(NavError::InvalidConfig(format!(
+                "view '{}' on stop '{}' has an emphasis outside 0–100",
+                view.id, node.id
+            )));
+        }
+    }
+    Ok(())
 }
 
 impl Graph {
